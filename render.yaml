@@ -1,6 +1,10 @@
 # Render.com infrastructure-as-code config.
-# Render reads this file when you connect the repo and provisions everything
-# automatically: web service + persistent disk for the SQLite database.
+# Render reads this file when you connect the repo and provisions the web service.
+#
+# NOTE: the free tier does NOT support persistent disks, so the SQLite file
+# lives on ephemeral storage. The database is RESET on every redeploy and when
+# the instance wakes from sleep. This is fine for a demo. For durable storage,
+# upgrade to a paid plan with a disk, or switch to a managed PostgreSQL.
 
 services:
   - type: web
@@ -13,11 +17,5 @@ services:
     envVars:
       - key: SECRET_KEY
         generateValue: true        # Render generates a strong random value
-      - key: DB_PATH
-        value: /var/data/study_tracker.db
       - key: PYTHON_VERSION
         value: "3.12.6"
-    disk:
-      name: study-tracker-data
-      mountPath: /var/data         # SQLite file lives here, survives redeploys
-      sizeGB: 1
