@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Register - Study Tracker{% endblock %}
+{% block content %}
+<section class="auth-card">
+  <h1>Create account</h1>
+  <p class="muted">Use your numeric Student ID. Only digits are allowed.</p>
+  <form method="post" class="form">
+    <label>Student ID
+      <input type="text" name="user_id" inputmode="numeric" pattern="[0-9]+"
+             placeholder="e.g. 220112345" required autofocus>
+    </label>
+    <label>Password
+      <input type="password" name="password" minlength="4" required>
+    </label>
+    <label>Confirm password
+      <input type="password" name="confirm" minlength="4" required>
+    </label>
+    <button class="btn btn-primary" type="submit">Create account</button>
+  </form>
+  <p class="muted small">Already registered? <a href="{{ url_for('login') }}">Log in</a>.</p>
+</section>
+{% endblock %}

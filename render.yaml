@@ -1,0 +1,23 @@
+# Render.com infrastructure-as-code config.
+# Render reads this file when you connect the repo and provisions everything
+# automatically: web service + persistent disk for the SQLite database.
+
+services:
+  - type: web
+    name: study-tracker
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 60
+    autoDeploy: true
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true        # Render generates a strong random value
+      - key: DB_PATH
+        value: /var/data/study_tracker.db
+      - key: PYTHON_VERSION
+        value: "3.12.6"
+    disk:
+      name: study-tracker-data
+      mountPath: /var/data         # SQLite file lives here, survives redeploys
+      sizeGB: 1

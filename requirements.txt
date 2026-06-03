@@ -1,0 +1,5 @@
+Flask>=3.0
+Werkzeug>=3.0
+scikit-learn>=1.7
+numpy>=2.1
+gunicorn>=22.0

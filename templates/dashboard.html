@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Study Tracker{% endblock %}
+{% block content %}
+
+<div id="period-banner" class="period-banner"></div>
+
+<section class="grid">
+
+  <!-- LEFT: subjects + add -->
+  <div class="card">
+    <h2>My subjects</h2>
+    <form id="add-subject-form" class="inline-form">
+      <input type="text" id="new-subject" placeholder="Add subject (e.g. Math)"
+             maxlength="80" required>
+      <button class="btn btn-primary" type="submit">Add</button>
+    </form>
+    <ul id="subject-list" class="subject-list"></ul>
+  </div>
+
+  <!-- MIDDLE: timer -->
+  <div class="card">
+    <h2>Study timer</h2>
+    <div class="timer-block">
+      <label>Subject
+        <select id="timer-subject"></select>
+      </label>
+      <div id="timer-display" class="timer-display">00:00:00</div>
+      <div class="timer-controls">
+        <button id="btn-start" class="btn btn-primary">Start</button>
+        <button id="btn-stop" class="btn btn-danger" disabled>Stop &amp; Save</button>
+      </div>
+      <p id="timer-status" class="muted small"></p>
+    </div>
+  </div>
+
+  <!-- RIGHT: add grade -->
+  <div class="card">
+    <h2>Add grade</h2>
+    <p class="muted small">
+      Enter a grade you have received (0–100). The ML model uses these to
+      learn how your study time translates into grades.
+    </p>
+    <form id="add-grade-form" class="form">
+      <label>Subject
+        <select id="grade-subject" required></select>
+      </label>
+      <label>Grade (0–100)
+        <input type="number" id="grade-value" min="0" max="100" step="0.1" required>
+      </label>
+      <label>Note (optional)
+        <input type="text" id="grade-note" maxlength="120"
+               placeholder="e.g. Midterm, Quiz 2">
+      </label>
+      <button class="btn btn-primary" type="submit">Save grade</button>
+    </form>
+  </div>
+
+</section>
+
+<!-- Recommendations -->
+<section class="card">
+  <h2>Recommendations</h2>
+  <div id="recommendations" class="recs"></div>
+  <button id="btn-refresh-recs" class="btn btn-ghost btn-small">Refresh</button>
+</section>
+
+<!-- Stats + grade prediction -->
+<section class="card">
+  <h2>Subject statistics &amp; grade prediction</h2>
+  <div class="table-wrap">
+    <table class="data-table" id="stats-table">
+      <thead>
+        <tr>
+          <th>Subject</th>
+          <th>Sessions</th>
+          <th>Total study (min)</th>
+          <th>Grades entered</th>
+          <th>Avg grade</th>
+          <th>Predicted next grade</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- Records -->
+<section class="card">
+  <h2>Recent study records</h2>
+  <div class="table-wrap">
+    <table class="data-table" id="records-table">
+      <thead>
+        <tr>
+          <th>Subject</th>
+          <th>Started</th>
+          <th>Ended</th>
+          <th>Duration</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- Grades -->
+<section class="card">
+  <h2>Recent grades</h2>
+  <div class="table-wrap">
+    <table class="data-table" id="grades-table">
+      <thead>
+        <tr>
+          <th>Subject</th>
+          <th>Grade</th>
+          <th>Note</th>
+          <th>Date</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+{% endblock %}
