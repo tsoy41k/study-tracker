@@ -293,6 +293,10 @@ input:focus, select:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37
   color: #374151;
   text-align: center;
 }
+/* Give the canvases a fixed height so Chart.js has room to draw into. */
+.chart-box canvas {
+  max-height: 260px;
+}
 
 /* ---- Utility ---- */
 .muted { color: #6b7280; }

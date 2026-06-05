@@ -411,24 +411,30 @@ async function loadRecommendations() {
     tbody.appendChild(tr);
   }
 
+  // Draw the charts FIRST, from data we already have, so they always appear
+  // even if a prediction request below is slow or fails.
+  drawCharts(data.subject_stats);
+
   // Fetch a grade prediction for every subject in parallel, then fill cells.
+  // Each fetch is wrapped in try/catch so one failure cannot break the others.
   const cells = tbody.querySelectorAll("td[data-pred]");
   await Promise.all(
     Array.from(cells).map(async (cell) => {
       const sid = cell.dataset.pred;                       // subject id
-      const p = await api.get(`/api/predict/${sid}`);      // call ML endpoint
-      if (p.ok && p.predicted_grade !== null && p.predicted_grade !== undefined) {
-        cell.textContent = `${p.predicted_grade} / 100  (${p.method})`;
-      } else if (p.ok) {
-        cell.textContent = `— (${p.method})`;              // no grade yet
-      } else {
-        cell.textContent = "—";
+      try {
+        const p = await api.get(`/api/predict/${sid}`);    // call ML endpoint
+        if (p.ok && p.predicted_grade !== null && p.predicted_grade !== undefined) {
+          cell.textContent = `${p.predicted_grade} / 100  (${p.method})`;
+        } else if (p.ok) {
+          cell.textContent = `— (${p.method})`;            // no grade yet
+        } else {
+          cell.textContent = "—";
+        }
+      } catch (e) {
+        cell.textContent = "—";                            // network/parse error
       }
     })
   );
-
-  // Finally redraw the charts from the same per-subject statistics.
-  drawCharts(data.subject_stats);
 }
 
 // Refresh button next to recommendations re-loads the whole dashboard.
@@ -442,6 +448,16 @@ document
  * ------------------------------------------------------------------- */
 
 function drawCharts(stats) {
+  // Defensive guard: if the Chart.js library did not load (e.g. the CDN is
+  // blocked by an ad-blocker or there is no internet), skip drawing instead
+  // of throwing a "Chart is not defined" error that would break the page.
+  if (typeof Chart === "undefined") {
+    const note = document.getElementById("charts-empty");
+    note.style.display = "block";
+    note.textContent = "Charts could not load (Chart.js library is unavailable).";
+    return;
+  }
+
   // Build parallel arrays from the stats objects.
   const labels = stats.map((s) => s.subject_name);          // x-axis labels
   const minutes = stats.map((s) => s.total_minutes);        // study minutes
