@@ -34,56 +34,65 @@ The model answers two questions for the student:
           - "No data for subject":       no records at all in this period.
 """
 
-from __future__ import annotations
+from __future__ import annotations          # allow "list[dict]" type hints on older Pythons
 
-from collections import defaultdict
-from datetime import datetime
-from statistics import mean
+from collections import defaultdict          # dict that creates default values on access
+from datetime import datetime                # parse timestamps stored as text
+from statistics import mean                  # simple average for the fallback path
 
-import numpy as np
-from sklearn.linear_model import LinearRegression
+import numpy as np                           # numeric arrays for the regression input
+from sklearn.linear_model import LinearRegression  # the actual ML model
 
+# Data-access helpers from our database layer (no raw SQL in this file).
 from database import (
-    analysis_status,
-    get_grades,
-    get_records,
-    get_subject,
-    get_subjects,
-    get_user,
+    analysis_status,   # period status (configured/finished/days_left)
+    get_grades,        # grades for a user/subject
+    get_records,       # study sessions for a user/subject
+    get_subject,       # one subject (with ownership check)
+    get_subjects,      # all subjects of a user
+    get_user,          # the user row (for the period gate)
 )
 
 
 # ---------- Helpers ----------
 
 def _parse_dt(value: str) -> datetime:
+    """Parse a stored timestamp string into a datetime (tolerates two formats)."""
     try:
-        return datetime.fromisoformat(value)
+        return datetime.fromisoformat(value)                    # e.g. "2025-05-27T10:00:00"
     except ValueError:
-        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")    # e.g. "2025-05-27 10:00:00"
 
 
 def _cumulative_minutes_at(records: list[dict], moment: datetime) -> float:
-    """Sum (in minutes) of all study records strictly before `moment`."""
-    total = 0
-    for r in records:
-        if _parse_dt(r["started_at"]) <= moment:
-            total += r["duration_sec"]
-    return total / 60.0
+    """
+    Total minutes studied up to (and including) `moment`.
+    Used to know how much study time existed when a grade was recorded.
+    """
+    total = 0                                          # running total in seconds
+    for r in records:                                  # walk every study session
+        if _parse_dt(r["started_at"]) <= moment:       # only sessions before the grade
+            total += r["duration_sec"]                 # add its length
+    return total / 60.0                                # convert seconds → minutes
 
 
 # ---------- Grade prediction ----------
 
 def predict_grade(user_id: int, subject_id: int) -> dict:
-    """Predict the next grade (0..100) for a subject."""
+    """Predict the next grade (0..100) for a subject using linear regression."""
+    # Verify the subject exists and belongs to this user.
     subject = get_subject(user_id, subject_id)
     if not subject:
         return {"ok": False, "error": "Subject not found"}
 
+    # Load this subject's study sessions, sorted oldest → newest.
     records = get_records(user_id, subject_id=subject_id, limit=10000)
     records.sort(key=lambda r: _parse_dt(r["started_at"]))
+    # Load this subject's grades, sorted oldest → newest.
     grades = get_grades(user_id, subject_id=subject_id)
     grades.sort(key=lambda g: _parse_dt(g["created_at"]))
 
+    # Fallback 0: no grades → we cannot predict anything yet.
     if not grades:
         return {
             "ok": True,
@@ -93,16 +102,21 @@ def predict_grade(user_id: int, subject_id: int) -> dict:
             "samples": 0,
         }
 
-    # Build (X, y): cumulative study minutes BEFORE the grade was given -> grade
+    # Build the training data:
+    #   X[i] = cumulative study minutes that existed when grade[i] was recorded
+    #   y[i] = the grade value itself
     X, y = [], []
     for g in grades:
-        moment = _parse_dt(g["created_at"])
-        cum_min = _cumulative_minutes_at(records, moment)
-        X.append([cum_min])
-        y.append(g["grade"])
+        moment = _parse_dt(g["created_at"])                 # when the grade was entered
+        cum_min = _cumulative_minutes_at(records, moment)   # study time up to that point
+        X.append([cum_min])                                 # one feature per sample
+        y.append(g["grade"])                                # the target value
 
+    # The student's CURRENT total study time on this subject (the value we
+    # feed into the trained model to get the next-grade prediction).
     current_total_min = sum(r["duration_sec"] for r in records) / 60.0
 
+    # Fallback 1: only one grade → regression needs at least two points.
     if len(grades) < 2:
         avg = float(mean(y))
         return {
@@ -114,10 +128,12 @@ def predict_grade(user_id: int, subject_id: int) -> dict:
             "current_study_minutes": round(current_total_min, 1),
         }
 
-    X_arr = np.array(X, dtype=float)
-    y_arr = np.array(y, dtype=float)
+    # Convert the Python lists to numpy arrays (what sklearn expects).
+    X_arr = np.array(X, dtype=float)        # shape (n_samples, 1)
+    y_arr = np.array(y, dtype=float)        # shape (n_samples,)
 
-    # Guard against zero variance in X (all grades entered at the same total time)
+    # Fallback 2: if every grade was recorded at the same study time, the X
+    # values have no variance and a line cannot be fitted → use the average.
     if float(np.std(X_arr)) < 1e-6:
         avg = float(np.mean(y_arr))
         return {
@@ -129,9 +145,12 @@ def predict_grade(user_id: int, subject_id: int) -> dict:
             "current_study_minutes": round(current_total_min, 1),
         }
 
+    # The real ML step: fit a straight line grade = slope*minutes + intercept.
     model = LinearRegression().fit(X_arr, y_arr)
+    # Predict the grade for the student's current total study time.
     pred = float(model.predict(np.array([[current_total_min]], dtype=float))[0])
-    pred = max(0.0, min(pred, 100.0))  # clamp to 0..100
+    # Clamp into the valid 0..100 range (regression can extrapolate outside it).
+    pred = max(0.0, min(pred, 100.0))
 
     return {
         "ok": True,
@@ -140,6 +159,7 @@ def predict_grade(user_id: int, subject_id: int) -> dict:
         "method": "linear regression (study time → grade)",
         "samples": len(grades),
         "current_study_minutes": round(current_total_min, 1),
+        # How many points the grade rises per extra hour of study (explainable!).
         "slope_per_hour": round(float(model.coef_[0]) * 60.0, 2),
     }
 
@@ -147,11 +167,13 @@ def predict_grade(user_id: int, subject_id: int) -> dict:
 # ---------- Recommendations ----------
 
 def _subject_stats(user_id: int) -> list[dict]:
-    """Aggregate per-subject totals: study minutes, sessions, avg grade."""
+    """Aggregate per-subject totals: study minutes, session count, average grade."""
+    # Load everything once, then group in memory (fewer DB round-trips).
     subjects = get_subjects(user_id)
     records  = get_records(user_id, limit=10000)
     grades   = get_grades(user_id)
 
+    # Group records and grades by subject id.
     by_subj_records: dict[int, list[dict]] = defaultdict(list)
     by_subj_grades:  dict[int, list[float]] = defaultdict(list)
     for r in records:
@@ -160,11 +182,11 @@ def _subject_stats(user_id: int) -> list[dict]:
         by_subj_grades[g["subject_id"]].append(float(g["grade"]))
 
     out = []
-    for s in subjects:
-        recs = by_subj_records.get(s["id"], [])
-        gs   = by_subj_grades.get(s["id"], [])
-        total_min = sum(r["duration_sec"] for r in recs) / 60.0
-        avg_grade = float(mean(gs)) if gs else None
+    for s in subjects:                                    # one stats row per subject
+        recs = by_subj_records.get(s["id"], [])           # this subject's sessions
+        gs   = by_subj_grades.get(s["id"], [])            # this subject's grades
+        total_min = sum(r["duration_sec"] for r in recs) / 60.0   # total study minutes
+        avg_grade = float(mean(gs)) if gs else None       # average grade (or None)
         out.append({
             "subject_id": s["id"],
             "subject_name": s["name"],
@@ -182,13 +204,15 @@ def generate_recommendations(user_id: int) -> dict:
     Gated behind the user's analysis period: if the period has not yet ended,
     return a single 'still collecting data' message and no advice.
     """
+    # Load the user (needed to read the analysis-period gate).
     user = get_user(user_id)
     if not user:
         return {"ok": False, "error": "User not found"}
 
-    status = analysis_status(user)
-    stats = _subject_stats(user_id)
+    status = analysis_status(user)        # period info (configured/finished/...)
+    stats = _subject_stats(user_id)       # per-subject aggregates (also used by charts)
 
+    # Gate 1: the user never chose a period → ask them to.
     if not status["configured"]:
         return {
             "ok": True,
@@ -200,6 +224,7 @@ def generate_recommendations(user_id: int) -> dict:
             }],
         }
 
+    # Gate 2: the period is still running → recommendations stay locked.
     if not status["finished"]:
         return {
             "ok": True,
@@ -215,13 +240,14 @@ def generate_recommendations(user_id: int) -> dict:
             }],
         }
 
-    # Period finished → produce real recommendations
+    # Period finished (or immediate mode) → run the rule set and build advice.
     recommendations: list[dict] = []
 
+    # Split subjects into "studied" and "not studied at all".
     studied_stats = [s for s in stats if s["sessions"] > 0]
     not_studied   = [s for s in stats if s["sessions"] == 0]
 
-    # 1) Subjects with no study at all during the period
+    # Rule 1) Warn about every subject that got no study time at all.
     for s in not_studied:
         recommendations.append({
             "type": "warning",
@@ -232,11 +258,11 @@ def generate_recommendations(user_id: int) -> dict:
         })
 
     if studied_stats:
-        # 2) Under-studied vs most-studied
+        # Rule 2) Flag a big imbalance between the least- and most-studied subjects.
         if len(studied_stats) >= 2:
-            min_s = min(studied_stats, key=lambda x: x["total_minutes"])
-            max_s = max(studied_stats, key=lambda x: x["total_minutes"])
-            if min_s["total_minutes"] < max_s["total_minutes"] * 0.5:
+            min_s = min(studied_stats, key=lambda x: x["total_minutes"])   # least time
+            max_s = max(studied_stats, key=lambda x: x["total_minutes"])   # most time
+            if min_s["total_minutes"] < max_s["total_minutes"] * 0.5:      # under half
                 recommendations.append({
                     "type": "focus",
                     "message": (
@@ -247,7 +273,7 @@ def generate_recommendations(user_id: int) -> dict:
                     ),
                 })
 
-        # 3) Low average grades
+        # Rule 3) Warn about subjects whose average grade is below 60.
         for s in studied_stats:
             if s["avg_grade"] is not None and s["avg_grade"] < 60:
                 recommendations.append({
@@ -259,10 +285,11 @@ def generate_recommendations(user_id: int) -> dict:
                     ),
                 })
 
-        # 4) Time vs grade mismatch
+        # Rule 4) Detect a mismatch between time spent and the grade achieved.
         for s in studied_stats:
-            if s["avg_grade"] is None:
+            if s["avg_grade"] is None:               # skip subjects with no grades
                 continue
+            # 4a) Lots of time but a low grade → the study method may be the issue.
             if s["total_minutes"] >= 180 and s["avg_grade"] < 70:
                 recommendations.append({
                     "type": "tip",
@@ -272,6 +299,7 @@ def generate_recommendations(user_id: int) -> dict:
                         f"The study method may need revision (practice tests, summaries, peers)."
                     ),
                 })
+            # 4b) Little time but a good grade → the current approach works well.
             if s["total_minutes"] <= 30 and s["avg_grade"] >= 80:
                 recommendations.append({
                     "type": "success",
@@ -282,12 +310,14 @@ def generate_recommendations(user_id: int) -> dict:
                     ),
                 })
 
+    # If no rule fired, give an encouraging "everything looks balanced" message.
     if not recommendations:
         recommendations.append({
             "type": "success",
             "message": "Your study habits during this period look balanced. Keep it up.",
         })
 
+    # Return advice + the stats (the front end reuses stats for the charts).
     return {
         "ok": True,
         "period": status,

@@ -1,6 +1,26 @@
+{# dashboard.html — the main application page.
+   It only renders empty containers; all data (subjects, timer, grades,
+   recommendations, stats, charts) is fetched and filled in by static/app.js
+   through the JSON API. Sections from top to bottom:
+     - period-finished notification + period banner
+     - subjects / timer / add-grade (3-column grid)
+     - recommendations
+     - charts (Chart.js)
+     - statistics + grade prediction table
+     - recent study records table
+     - recent grades table #}
 {% extends "base.html" %}
 {% block title %}Dashboard - Study Tracker{% endblock %}
 {% block content %}
+
+<!-- Notification shown once when the analysis period has just finished -->
+<div id="period-notification" class="period-notification" style="display:none;">
+  <div class="period-notification-text">
+    <strong>Your analysis period is over!</strong>
+    Recommendations are now unlocked — scroll down to see your personalised advice.
+  </div>
+  <button id="btn-dismiss-notification" class="btn btn-small" type="button">Got it</button>
+</div>
 
 <div id="period-banner" class="period-banner"></div>
 
@@ -35,21 +55,24 @@
 
   <!-- RIGHT: add grade -->
   <div class="card">
-    <h2>Add grade</h2>
+    <h2>Add grade <span class="badge-optional">optional</span></h2>
     <p class="muted small">
-      Enter a grade you have received (0–100). The ML model uses these to
-      learn how your study time translates into grades.
+      This field is <strong>optional</strong>. For the best predictions,
+      enter your <strong>final grades from the previous year</strong> for each
+      subject (0–100). The ML model uses the link between your study time and
+      these grades to predict your next grade.
     </p>
     <form id="add-grade-form" class="form">
       <label>Subject
-        <select id="grade-subject" required></select>
+        <select id="grade-subject"></select>
       </label>
       <label>Grade (0–100)
-        <input type="number" id="grade-value" min="0" max="100" step="0.1" required>
+        <input type="number" id="grade-value" min="0" max="100" step="0.1"
+               placeholder="e.g. 85 (last year's final)">
       </label>
       <label>Note (optional)
         <input type="text" id="grade-note" maxlength="120"
-               placeholder="e.g. Midterm, Quiz 2">
+               placeholder="e.g. Final 2023/24, Midterm">
       </label>
       <button class="btn btn-primary" type="submit">Save grade</button>
     </form>
@@ -62,6 +85,28 @@
   <h2>Recommendations</h2>
   <div id="recommendations" class="recs"></div>
   <button id="btn-refresh-recs" class="btn btn-ghost btn-small">Refresh</button>
+</section>
+
+<!-- Charts -->
+<section class="card">
+  <h2>Visual overview</h2>
+  <div class="charts-grid">
+    <div class="chart-box">
+      <h3 class="chart-title">Study time per subject (minutes)</h3>
+      <canvas id="chart-time"></canvas>
+    </div>
+    <div class="chart-box">
+      <h3 class="chart-title">Time distribution</h3>
+      <canvas id="chart-distribution"></canvas>
+    </div>
+    <div class="chart-box">
+      <h3 class="chart-title">Average grade per subject</h3>
+      <canvas id="chart-grades"></canvas>
+    </div>
+  </div>
+  <p id="charts-empty" class="muted small" style="display:none;">
+    No data yet. Start a study session or add a grade to see charts.
+  </p>
 </section>
 
 <!-- Stats + grade prediction -->
@@ -123,5 +168,7 @@
 {% endblock %}
 
 {% block scripts %}
+<!-- Chart.js from CDN: lightweight charting library, no install needed -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <script src="{{ url_for('static', filename='app.js') }}"></script>
 {% endblock %}

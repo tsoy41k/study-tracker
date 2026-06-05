@@ -1,3 +1,19 @@
+/* =====================================================================
+ * Study Tracker — global stylesheet.
+ *
+ * Organised into clearly labelled sections (search for "/* ---- "):
+ *   Reset & base, Topbar, Layout, Card, Buttons, Forms, Auth card,
+ *   Flash messages, Subject list, Timer, Recommendations, Tables,
+ *   Period banner, Period-finished notification, "optional" badge,
+ *   Charts, and Utility classes.
+ *
+ * Colour conventions used across the UI:
+ *   blue   #2563eb  -> primary actions / active period
+ *   green  #16a34a  -> success / finished period
+ *   red    #dc2626  -> danger / warnings
+ *   grey   #6b7280  -> muted secondary text
+ * ===================================================================== */
+
 /* ---- Reset & base ---- */
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
@@ -214,6 +230,69 @@ input:focus, select:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37
 .period-banner:empty { display: none; }
 .period-banner.active   { background: #eff6ff; color: #1e3a8a; border-left: 4px solid #2563eb; }
 .period-banner.finished { background: #f0fdf4; color: #14532d; border-left: 4px solid #16a34a; }
+
+/* ---- "Period finished" notification ---- */
+.period-notification {
+  display: flex;                       /* toggled to flex by JS when shown */
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 20px;
+  margin-bottom: 18px;
+  border-radius: 12px;
+  background: linear-gradient(90deg, #16a34a, #22c55e);  /* eye-catching green */
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(22, 163, 74, .35);
+  animation: notif-pop .35s ease;
+}
+.period-notification-text { font-size: 1rem; line-height: 1.4; }
+.period-notification .btn {
+  background: rgba(255, 255, 255, .2);
+  color: #fff;
+  white-space: nowrap;
+}
+.period-notification .btn:hover { background: rgba(255, 255, 255, .3); }
+@keyframes notif-pop {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ---- "optional" badge next to a heading ---- */
+.badge-optional {
+  display: inline-block;
+  font-size: .68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  color: #6b7280;
+  background: #f3f4f6;
+  border: 1px solid #e5e7eb;
+  border-radius: 999px;
+  padding: 2px 8px;
+  vertical-align: middle;
+  margin-left: 6px;
+}
+
+/* ---- Charts ---- */
+.charts-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;  /* three charts side by side */
+  gap: 18px;
+}
+@media (max-width: 980px) {
+  .charts-grid { grid-template-columns: 1fr; }  /* stack on small screens */
+}
+.chart-box {
+  background: #f9fafb;
+  border-radius: 10px;
+  padding: 14px;
+}
+.chart-title {
+  margin: 0 0 10px;
+  font-size: .9rem;
+  color: #374151;
+  text-align: center;
+}
 
 /* ---- Utility ---- */
 .muted { color: #6b7280; }

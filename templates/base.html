@@ -1,19 +1,31 @@
+{#
+  base.html — the shared layout every other page extends.
+
+  It provides:
+    * <head> with the stylesheet link and a {% block title %} for per-page titles
+    * the top navigation bar (shows the user ID + Log out when logged in,
+      otherwise Log in / Register)
+    * a flash-message area (one-time messages set with flash() in app.py)
+    * {% block content %} where child templates inject their page body
+    * {% block scripts %} where child templates add page-specific scripts
+#}
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}Study Tracker{% endblock %}</title>
+  <meta charset="utf-8">                                           {# unicode support #}
+  <meta name="viewport" content="width=device-width, initial-scale=1"> {# mobile-friendly #}
+  <title>{% block title %}Study Tracker{% endblock %}</title>       {# per-page title #}
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
+  {# ---- Top navigation bar ---- #}
   <header class="topbar">
     <a href="{{ url_for('index') }}" class="brand">Study Tracker</a>
     <nav>
-      {% if session.get('user_id') %}
+      {% if session.get('user_id') %}   {# logged-in view #}
         <span class="user-pill">ID: {{ session['user_id'] }}</span>
         <a href="{{ url_for('logout') }}" class="btn btn-ghost">Log out</a>
-      {% else %}
+      {% else %}                          {# logged-out view #}
         <a href="{{ url_for('login') }}" class="btn btn-ghost">Log in</a>
         <a href="{{ url_for('register') }}" class="btn btn-primary">Register</a>
       {% endif %}
@@ -21,6 +33,7 @@
   </header>
 
   <main class="container">
+    {# ---- Flash messages (errors / success notices) ---- #}
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
         <div class="flash-list">
@@ -31,9 +44,9 @@
       {% endif %}
     {% endwith %}
 
-    {% block content %}{% endblock %}
+    {% block content %}{% endblock %}   {# child page body goes here #}
   </main>
 
-  {% block scripts %}{% endblock %}
+  {% block scripts %}{% endblock %}     {# child page scripts go here #}
 </body>
 </html>

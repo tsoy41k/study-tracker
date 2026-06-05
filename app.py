@@ -1,6 +1,11 @@
 """
 Flask backend for the Study Tracker web application.
 
+This file wires together everything the browser talks to:
+  * HTML page routes (login, register, setup, dashboard).
+  * A small JSON API used by the dashboard's JavaScript (subjects, study
+    records, grades, ML predictions, recommendations, analysis period).
+
 Page routes:
   GET  /                       -> redirect to dashboard or login
   GET/POST /register           -> create account (numeric ID + password).
@@ -27,57 +32,70 @@ JSON API:
   GET    /api/period                   -> analysis period status
 """
 
-import os
-from datetime import datetime
-from functools import wraps
+import os                                  # read environment variables (SECRET_KEY)
+from datetime import datetime              # parse/normalise ISO datetime strings
+from functools import wraps                # preserve function metadata in decorators
 
+# Flask components we use throughout the app.
 from flask import (
-    Flask, jsonify, redirect, render_template,
-    request, session, url_for, flash,
+    Flask,            # the application object
+    jsonify,          # turn a dict into a JSON HTTP response
+    redirect,         # send an HTTP redirect
+    render_template,  # render a Jinja2 HTML template
+    request,          # access the incoming request (form data, JSON, query args)
+    session,          # signed cookie storage for the logged-in user id
+    url_for,          # build URLs from view function names
+    flash,            # one-time messages shown on the next page
 )
+# Password helpers: hash on registration, verify on login (never store plaintext).
 from werkzeug.security import check_password_hash, generate_password_hash
 
-import database as db
-from ml_model import generate_recommendations, predict_grade
+import database as db                                   # our SQLite data-access layer
+from ml_model import generate_recommendations, predict_grade  # the ML/advice functions
 
 
+# Create the Flask application instance.
 app = Flask(__name__)
-# In production set SECRET_KEY env var. The fallback is fine for local dev only.
+# Secret key signs the session cookie. In production it is supplied via the
+# SECRET_KEY environment variable (set on Render); the fallback is dev-only.
 app.secret_key = os.environ.get("SECRET_KEY", "dev-only-secret-change-me")
 
-# Make sure the DB schema exists on startup (matters for gunicorn workers).
+# Ensure all database tables exist as soon as the module is imported. This is
+# important under gunicorn, where each worker imports this module on startup.
 db.init_db()
 
 
 # ---------- Auth helpers ----------
 
 def login_required(view):
-    @wraps(view)
+    """Decorator: only allow the wrapped view if a user is logged in."""
+    @wraps(view)                                  # keep the original function's name/docstring
     def wrapped(*args, **kwargs):
-        if "user_id" not in session:
-            if request.path.startswith("/api/"):
+        if "user_id" not in session:             # no logged-in user in the session
+            if request.path.startswith("/api/"): # API calls get a JSON 401...
                 return jsonify({"ok": False, "error": "auth required"}), 401
-            return redirect(url_for("login"))
-        return view(*args, **kwargs)
+            return redirect(url_for("login"))    # ...page requests are redirected to login
+        return view(*args, **kwargs)             # authorised → run the real view
     return wrapped
 
 
 def setup_required(view):
-    """Block dashboard until the analysis period is configured."""
+    """Decorator: block the dashboard until the analysis period is configured."""
     @wraps(view)
     def wrapped(*args, **kwargs):
-        user = db.get_user(int(session["user_id"]))
+        user = db.get_user(int(session["user_id"]))   # load the current user row
         if user is None:
-            # Stale session referring to a deleted/missing user.
-            session.clear()
+            # The session points to a user that no longer exists (e.g. DB reset).
+            session.clear()                            # drop the stale session
             return redirect(url_for("login"))
-        if user.get("analysis_period_days") is None:
-            return redirect(url_for("setup"))
-        return view(*args, **kwargs)
+        if user.get("analysis_period_days") is None:   # period not chosen yet
+            return redirect(url_for("setup"))          # force the setup screen first
+        return view(*args, **kwargs)                    # all good → show the dashboard
     return wrapped
 
 
 def current_user_id() -> int:
+    """Return the logged-in user's numeric id from the session."""
     return int(session["user_id"])
 
 
@@ -85,6 +103,7 @@ def current_user_id() -> int:
 
 @app.route("/")
 def index():
+    """Root URL: send logged-in users to the dashboard, others to login."""
     if "user_id" in session:
         return redirect(url_for("dashboard"))
     return redirect(url_for("login"))
@@ -92,59 +111,72 @@ def index():
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
-    if request.method == "POST":
-        user_id_raw = request.form.get("user_id", "").strip()
-        password = request.form.get("password", "")
-        confirm = request.form.get("confirm", "")
+    """Create a new account from a numeric Student ID + password."""
+    if request.method == "POST":                          # the form was submitted
+        user_id_raw = request.form.get("user_id", "").strip()  # raw ID text
+        password = request.form.get("password", "")            # chosen password
+        confirm = request.form.get("confirm", "")              # password confirmation
 
+        # Validation 1: the Student ID must be digits only.
         if not user_id_raw.isdigit():
             flash("Student ID must contain only digits.", "error")
             return render_template("register.html")
+        # Validation 2: minimum password length.
         if len(password) < 4:
             flash("Password must be at least 4 characters.", "error")
             return render_template("register.html")
+        # Validation 3: both password fields must match.
         if password != confirm:
             flash("Passwords do not match.", "error")
             return render_template("register.html")
 
-        user_id = int(user_id_raw)
+        user_id = int(user_id_raw)                        # safe: validated as digits
+        # Validation 4: the ID must not already be registered.
         if db.get_user(user_id):
             flash("This Student ID is already registered. Please log in.", "error")
             return render_template("register.html")
 
+        # Create the user (also auto-creates the 6 default subjects) and log in.
         db.create_user(user_id, generate_password_hash(password))
-        session["user_id"] = user_id
+        session["user_id"] = user_id                      # mark the user as logged in
         flash("Account created. Now choose your analysis period.", "success")
-        return redirect(url_for("setup"))
+        return redirect(url_for("setup"))                 # go to first-time setup
 
+    # GET request: just show the empty registration form.
     return render_template("register.html")
 
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    if request.method == "POST":
+    """Authenticate an existing user by Student ID + password."""
+    if request.method == "POST":                          # the login form was submitted
         user_id_raw = request.form.get("user_id", "").strip()
         password = request.form.get("password", "")
 
+        # The ID must be numeric; if not, reject immediately.
         if not user_id_raw.isdigit():
             flash("Student ID must contain only digits.", "error")
             return render_template("login.html")
 
-        user = db.get_user(int(user_id_raw))
+        user = db.get_user(int(user_id_raw))              # look up the user row
+        # Reject if no such user OR the password hash does not match.
         if not user or not check_password_hash(user["password_hash"], password):
             flash("Invalid Student ID or password.", "error")
             return render_template("login.html")
 
-        session["user_id"] = int(user_id_raw)
+        session["user_id"] = int(user_id_raw)             # log the user in
+        # If they never set an analysis period, send them to setup first.
         if user.get("analysis_period_days") is None:
             return redirect(url_for("setup"))
-        return redirect(url_for("dashboard"))
+        return redirect(url_for("dashboard"))             # otherwise straight to dashboard
 
+    # GET request: show the empty login form.
     return render_template("login.html")
 
 
 @app.route("/logout", methods=["POST", "GET"])
 def logout():
+    """Log out by clearing the session, then go back to the login page."""
     session.clear()
     return redirect(url_for("login"))
 
@@ -152,25 +184,27 @@ def logout():
 @app.route("/setup", methods=["GET", "POST"])
 @login_required
 def setup():
-    user = db.get_user(current_user_id())
+    """First-time setup: the user picks how long the analysis period lasts."""
+    user = db.get_user(current_user_id())                 # load current user
     if user is None:
-        session.clear()
+        session.clear()                                   # stale session → log out
         return redirect(url_for("login"))
     if user.get("analysis_period_days") is not None:
-        # Already configured — go to dashboard
+        # Already configured before → no need to set it again.
         return redirect(url_for("dashboard"))
 
-    if request.method == "POST":
+    if request.method == "POST":                          # the setup form was submitted
         days_raw = request.form.get("days", "").strip()
-        if not days_raw.isdigit():
+        if not days_raw.isdigit():                        # must be a number
             flash("Please choose a valid number of days.", "error")
             return render_template("setup.html")
         days = int(days_raw)
+        # 0 = immediate mode; up to 365 days for a normal analysis window.
         if not (0 <= days <= 365):
             flash("Analysis period must be between 0 and 365 days.", "error")
             return render_template("setup.html")
 
-        db.set_analysis_period(current_user_id(), days)
+        db.set_analysis_period(current_user_id(), days)   # store the choice + start time
         if days == 0:
             flash(
                 "Immediate mode enabled. Recommendations are available right away.",
@@ -184,13 +218,15 @@ def setup():
             )
         return redirect(url_for("dashboard"))
 
+    # GET request: show the period-selection form.
     return render_template("setup.html")
 
 
 @app.route("/dashboard")
-@login_required
-@setup_required
+@login_required      # must be logged in...
+@setup_required      # ...and must have configured the analysis period
 def dashboard():
+    """Render the main dashboard page (all data is loaded via the JSON API)."""
     return render_template("dashboard.html", user_id=current_user_id())
 
 
@@ -199,21 +235,24 @@ def dashboard():
 @app.get("/api/subjects")
 @login_required
 def api_list_subjects():
+    """Return the current user's subjects as JSON."""
     return jsonify({"ok": True, "subjects": db.get_subjects(current_user_id())})
 
 
 @app.post("/api/subjects")
 @login_required
 def api_add_subject():
-    data = request.get_json(silent=True) or {}
-    name = (data.get("name") or "").strip()
-    if not name:
+    """Add a new subject for the current user."""
+    data = request.get_json(silent=True) or {}            # parse JSON body (or {})
+    name = (data.get("name") or "").strip()               # subject name, trimmed
+    if not name:                                          # name is required
         return jsonify({"ok": False, "error": "Subject name is required"}), 400
-    if len(name) > 80:
+    if len(name) > 80:                                    # keep names reasonable
         return jsonify({"ok": False, "error": "Subject name is too long"}), 400
     try:
-        sid = db.add_subject(current_user_id(), name)
+        sid = db.add_subject(current_user_id(), name)     # insert into DB
     except Exception:
+        # The (user_id, name) UNIQUE constraint failed → duplicate subject.
         return jsonify({"ok": False, "error": "Subject already exists"}), 400
     return jsonify({"ok": True, "id": sid, "name": name})
 
@@ -221,8 +260,9 @@ def api_add_subject():
 @app.delete("/api/subjects/<int:subject_id>")
 @login_required
 def api_delete_subject(subject_id: int):
+    """Delete a subject (and, via cascade, its records and grades)."""
     ok = db.delete_subject(current_user_id(), subject_id)
-    if not ok:
+    if not ok:                                            # nothing was deleted
         return jsonify({"ok": False, "error": "Subject not found"}), 404
     return jsonify({"ok": True})
 
@@ -232,8 +272,10 @@ def api_delete_subject(subject_id: int):
 @app.post("/api/records")
 @login_required
 def api_add_record():
+    """Store one completed study session (the result of the timer)."""
     data = request.get_json(silent=True) or {}
     try:
+        # Pull and type-cast the required fields; missing/invalid → except.
         subject_id = int(data["subject_id"])
         started_at = str(data["started_at"])
         ended_at = str(data["ended_at"])
@@ -241,18 +283,21 @@ def api_add_record():
     except (KeyError, ValueError, TypeError):
         return jsonify({"ok": False, "error": "Invalid payload"}), 400
 
-    if duration_sec <= 0:
+    if duration_sec <= 0:                                 # a session must have a length
         return jsonify({"ok": False, "error": "Duration must be positive"}), 400
 
+    # Make sure the subject exists and belongs to this user.
     if not db.get_subject(current_user_id(), subject_id):
         return jsonify({"ok": False, "error": "Subject not found"}), 404
 
     try:
+        # Normalise both timestamps to "YYYY-MM-DD HH:MM:SS" for storage.
         started_at = datetime.fromisoformat(started_at).isoformat(sep=" ", timespec="seconds")
         ended_at   = datetime.fromisoformat(ended_at).isoformat(sep=" ", timespec="seconds")
     except ValueError:
         return jsonify({"ok": False, "error": "Bad datetime format"}), 400
 
+    # Insert and return the new record id.
     rid = db.add_record(current_user_id(), subject_id, started_at, ended_at, duration_sec)
     return jsonify({"ok": True, "id": rid})
 
@@ -260,7 +305,8 @@ def api_add_record():
 @app.get("/api/records")
 @login_required
 def api_list_records():
-    subject_id = request.args.get("subject_id", type=int)
+    """List study records, optionally filtered to a single subject."""
+    subject_id = request.args.get("subject_id", type=int)        # optional ?subject_id=
     records = db.get_records(current_user_id(), subject_id=subject_id)
     return jsonify({"ok": True, "records": records})
 
@@ -270,28 +316,30 @@ def api_list_records():
 @app.post("/api/grades")
 @login_required
 def api_add_grade():
+    """Store a grade (0..100) the student received for a subject."""
     data = request.get_json(silent=True) or {}
     try:
-        subject_id = int(data["subject_id"])
-        grade = float(data["grade"])
-        note = str(data.get("note", "")).strip()
+        subject_id = int(data["subject_id"])             # which subject
+        grade = float(data["grade"])                     # the grade value
+        note = str(data.get("note", "")).strip()         # optional label
     except (KeyError, ValueError, TypeError):
         return jsonify({"ok": False, "error": "Invalid payload"}), 400
 
-    if not (0.0 <= grade <= 100.0):
+    if not (0.0 <= grade <= 100.0):                       # grades are on a 0..100 scale
         return jsonify({"ok": False, "error": "Grade must be between 0 and 100"}), 400
-    if not db.get_subject(current_user_id(), subject_id):
+    if not db.get_subject(current_user_id(), subject_id):  # subject must belong to user
         return jsonify({"ok": False, "error": "Subject not found"}), 404
-    if len(note) > 120:
+    if len(note) > 120:                                  # keep notes short
         return jsonify({"ok": False, "error": "Note is too long"}), 400
 
-    gid = db.add_grade(current_user_id(), subject_id, grade, note)
+    gid = db.add_grade(current_user_id(), subject_id, grade, note)  # insert
     return jsonify({"ok": True, "id": gid})
 
 
 @app.get("/api/grades")
 @login_required
 def api_list_grades():
+    """List grades, optionally filtered to a single subject."""
     subject_id = request.args.get("subject_id", type=int)
     return jsonify({"ok": True, "grades": db.get_grades(current_user_id(), subject_id)})
 
@@ -301,20 +349,23 @@ def api_list_grades():
 @app.get("/api/predict/<int:subject_id>")
 @login_required
 def api_predict(subject_id: int):
+    """Return the ML-predicted next grade for one subject."""
     return jsonify(predict_grade(current_user_id(), subject_id))
 
 
 @app.get("/api/recommendations")
 @login_required
 def api_recommendations():
+    """Return recommendations + per-subject statistics (gated by the period)."""
     return jsonify(generate_recommendations(current_user_id()))
 
 
 @app.get("/api/period")
 @login_required
 def api_period():
+    """Return the analysis-period status used by the dashboard banner."""
     user = db.get_user(current_user_id())
-    if user is None:
+    if user is None:                                     # stale session safety check
         session.clear()
         return jsonify({"ok": False, "error": "auth required"}), 401
     return jsonify({"ok": True, "period": db.analysis_status(user)})
@@ -323,5 +374,7 @@ def api_period():
 # ---------- Entry point ----------
 
 if __name__ == "__main__":
-    db.init_db()
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    # Only runs for local development (`python app.py`). On Render the app is
+    # started by gunicorn instead, which imports `app` without running this block.
+    db.init_db()                                         # make sure tables exist
+    app.run(host="127.0.0.1", port=5000, debug=True)    # dev server with auto-reload
