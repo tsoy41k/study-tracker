@@ -3,21 +3,21 @@
  *
  * Responsibilities:
  *   - Talk to the Flask JSON API (fetch wrapper `api`).
- *   - Manage the subjects list (add / delete / fill dropdowns).
+ *   - Manage the subjects list (add / delete / fill the timer dropdown).
  *   - Run the study timer (start / stop / save a record).
- *   - Save grades entered by the student.
- *   - Show recommendations + per-subject statistics + grade predictions.
- *   - Draw three Chart.js charts (study time bar, distribution pie, grades bar).
+ *   - Show rule-based recommendations + per-subject statistics.
+ *   - Render the two ML models:
+ *       * Study patterns  (KMeans)  -> scatter chart + cluster summary
+ *       * Study forecast  (Linear regression) -> weekly line + trend
+ *   - Draw the overview charts (study time bar + distribution pie).
  *   - Show the analysis-period banner and the "period finished" notification.
  *
- * The whole file is plain browser JavaScript (no framework). It is loaded
- * at the bottom of dashboard.html, after Chart.js.
+ * Plain browser JavaScript (no framework). Loaded after Chart.js.
  * ===================================================================== */
 
 
 /* ---------------------------------------------------------------------
  * `api` — a tiny wrapper around fetch() so we don't repeat boilerplate.
- * Every method returns the parsed JSON body of the response.
  * ------------------------------------------------------------------- */
 const api = {
   // GET request → returns parsed JSON.
@@ -44,12 +44,12 @@ const api = {
 
 /* ---------------------------------------------------------------------
  * Chart.js chart instances. We keep references so we can destroy and
- * redraw them every time the data changes (Chart.js does not auto-update
- * from new arrays unless we update or recreate the chart).
+ * recreate each chart whenever the data changes.
  * ------------------------------------------------------------------- */
 let chartTime = null;          // bar chart: study minutes per subject
 let chartDistribution = null;  // pie chart: share of total study time
-let chartGrades = null;        // bar chart: average grade per subject
+let chartPatterns = null;      // scatter chart: KMeans clusters (hour vs minutes)
+let chartForecast = null;      // line chart: weekly minutes + regression forecast
 
 
 /* ---------------------------------------------------------------------
@@ -96,8 +96,8 @@ async function loadPeriod() {
 
 /*
  * Show the big "your period is over" notification once per finished period.
- * We use localStorage so the notification is not shown again after the user
- * dismisses it (keyed by the period end date, so a NEW period shows it again).
+ * We use localStorage so it is not shown again after the user dismisses it
+ * (keyed by the period end date, so a NEW period shows it again).
  */
 function maybeShowFinishedNotification(period) {
   if (period.immediate) return;                 // never for immediate mode
@@ -116,22 +116,19 @@ function maybeShowFinishedNotification(period) {
 
 
 /* ---------------------------------------------------------------------
- * Subjects: load list, fill the two dropdowns, handle add / delete.
+ * Subjects: load list, fill the timer dropdown, handle add / delete.
  * ------------------------------------------------------------------- */
 
 async function loadSubjects() {
   const data = await api.get("/api/subjects");  // fetch the subjects
   if (!data.ok) return;                         // bail out on error
 
-  // Grab the three places that show subjects.
   const list = document.getElementById("subject-list");      // the visible list
   const select = document.getElementById("timer-subject");   // timer dropdown
-  const gradeSelect = document.getElementById("grade-subject"); // grade dropdown
 
-  // Clear all three before re-filling them.
+  // Clear both before re-filling them.
   list.innerHTML = "";
   select.innerHTML = "";
-  gradeSelect.innerHTML = "";
 
   // Special case: the user has no subjects.
   if (data.subjects.length === 0) {
@@ -139,8 +136,7 @@ async function loadSubjects() {
     const opt = document.createElement("option");
     opt.textContent = "No subjects available";
     opt.disabled = true;
-    select.appendChild(opt.cloneNode(true));  // put a placeholder in both selects
-    gradeSelect.appendChild(opt);
+    select.appendChild(opt);
     document.getElementById("btn-start").disabled = true;  // can't start a timer
     return;
   }
@@ -154,20 +150,17 @@ async function loadSubjects() {
                     <button class="del" data-id="${s.id}" title="Delete">×</button>`;
     list.appendChild(li);
 
-    // Add the subject as an option in BOTH dropdowns.
-    for (const sel of [select, gradeSelect]) {
-      const opt = document.createElement("option");
-      opt.value = s.id;             // option value = subject id
-      opt.textContent = s.name;     // option label = subject name
-      sel.appendChild(opt);
-    }
+    const opt = document.createElement("option");
+    opt.value = s.id;             // option value = subject id
+    opt.textContent = s.name;     // option label = subject name
+    select.appendChild(opt);
   }
 
   // Attach click handlers to every delete (×) button.
   list.querySelectorAll(".del").forEach((b) => {
     b.addEventListener("click", async () => {
-      // Confirm because deleting a subject cascades to its records/grades.
-      if (!confirm("Delete this subject and ALL its records/grades?")) return;
+      // Confirm because deleting a subject cascades to its records.
+      if (!confirm("Delete this subject and ALL its records?")) return;
       const res = await api.del(`/api/subjects/${b.dataset.id}`);
       if (res.ok) {
         await reloadAll();          // refresh the whole dashboard
@@ -189,7 +182,7 @@ document
     const res = await api.post("/api/subjects", { name });
     if (res.ok) {
       input.value = "";                               // clear the input
-      await loadSubjects();                           // refresh the list/dropdowns
+      await loadSubjects();                           // refresh the list/dropdown
       await loadRecommendations();                    // stats may change
     } else {
       alert(res.error || "Failed to add subject");
@@ -270,72 +263,16 @@ document.getElementById("btn-stop").addEventListener("click", async () => {
   if (res.ok) {
     document.getElementById("timer-status").textContent =
       `Saved! Session: ${formatHMS(durationSec)}`;
-    await loadRecords();          // refresh the records table
-    await loadRecommendations();  // refresh stats + charts
+    // A new record changes everything ML-related → refresh all of it.
+    await loadRecords();
+    await loadRecommendations();
+    await loadPatterns();
+    await loadForecast();
   } else {
     document.getElementById("timer-status").textContent =
       "Error: " + (res.error || "could not save");
   }
 });
-
-
-/* ---------------------------------------------------------------------
- * Grades: save a grade (optional field) and list recent grades.
- * ------------------------------------------------------------------- */
-
-document
-  .getElementById("add-grade-form")
-  .addEventListener("submit", async (e) => {
-    e.preventDefault();  // don't reload the page
-
-    const subjectSel = document.getElementById("grade-subject");
-    const subjectId = parseInt(subjectSel.value, 10);
-    const gradeRaw = document.getElementById("grade-value").value;
-    const note = document.getElementById("grade-note").value.trim();
-
-    // The grade field is OPTIONAL — but if the form is submitted, a subject
-    // and a valid grade must be present.
-    if (!subjectSel.value) {
-      alert("Choose a subject for this grade.");
-      return;
-    }
-    const grade = parseFloat(gradeRaw);
-    if (gradeRaw === "" || isNaN(grade) || grade < 0 || grade > 100) {
-      alert("Enter a grade between 0 and 100 (or leave the grade form empty).");
-      return;
-    }
-
-    const res = await api.post("/api/grades", { subject_id: subjectId, grade, note });
-    if (res.ok) {
-      document.getElementById("grade-value").value = "";  // clear inputs
-      document.getElementById("grade-note").value = "";
-      await loadGrades();           // refresh grades table
-      await loadRecommendations();  // grade affects stats/predictions/charts
-    } else {
-      alert(res.error || "Failed to save grade");
-    }
-  });
-
-// Load and render the recent grades table.
-async function loadGrades() {
-  const data = await api.get("/api/grades");
-  const tbody = document.querySelector("#grades-table tbody");
-  tbody.innerHTML = "";
-  if (!data.ok || data.grades.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="4" class="muted">No grades yet.</td></tr>';
-    return;
-  }
-  // Show up to 30 most recent grades.
-  for (const g of data.grades.slice(0, 30)) {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${escapeHtml(g.subject_name)}</td>
-      <td>${Number(g.grade).toFixed(1)}</td>
-      <td>${escapeHtml(g.note || "")}</td>
-      <td>${escapeHtml(g.created_at)}</td>`;
-    tbody.appendChild(tr);
-  }
-}
 
 
 /* ---------------------------------------------------------------------
@@ -364,8 +301,7 @@ async function loadRecords() {
 
 
 /* ---------------------------------------------------------------------
- * Recommendations + statistics table + grade predictions + charts.
- * This is the central "refresh everything ML-related" function.
+ * Recommendations + per-subject statistics table + overview charts.
  * ------------------------------------------------------------------- */
 
 async function loadRecommendations() {
@@ -386,55 +322,26 @@ async function loadRecommendations() {
     box.appendChild(div);
   }
 
-  // ----- Statistics table -----
+  // ----- Statistics table (Subject / Sessions / Total minutes) -----
   const tbody = document.querySelector("#stats-table tbody");
   tbody.innerHTML = "";
   if (!data.subject_stats || data.subject_stats.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="6" class="muted">No statistics yet.</td></tr>';
-    drawCharts([]);   // clear charts too
+    tbody.innerHTML = '<tr><td colspan="3" class="muted">No statistics yet.</td></tr>';
+    drawOverviewCharts([]);   // clear the overview charts too
     return;
   }
 
-  // One row per subject; the prediction cell is filled in asynchronously.
   for (const s of data.subject_stats) {
     const tr = document.createElement("tr");
-    const avg = s.avg_grade !== null && s.avg_grade !== undefined
-      ? Number(s.avg_grade).toFixed(1)
-      : "—";
     tr.innerHTML = `
       <td>${escapeHtml(s.subject_name)}</td>
       <td>${s.sessions}</td>
-      <td>${s.total_minutes}</td>
-      <td>${s.grades_count}</td>
-      <td>${avg}</td>
-      <td data-pred="${s.subject_id}">loading…</td>`;
+      <td>${s.total_minutes}</td>`;
     tbody.appendChild(tr);
   }
 
-  // Draw the charts FIRST, from data we already have, so they always appear
-  // even if a prediction request below is slow or fails.
-  drawCharts(data.subject_stats);
-
-  // Fetch a grade prediction for every subject in parallel, then fill cells.
-  // Each fetch is wrapped in try/catch so one failure cannot break the others.
-  const cells = tbody.querySelectorAll("td[data-pred]");
-  await Promise.all(
-    Array.from(cells).map(async (cell) => {
-      const sid = cell.dataset.pred;                       // subject id
-      try {
-        const p = await api.get(`/api/predict/${sid}`);    // call ML endpoint
-        if (p.ok && p.predicted_grade !== null && p.predicted_grade !== undefined) {
-          cell.textContent = `${p.predicted_grade} / 100  (${p.method})`;
-        } else if (p.ok) {
-          cell.textContent = `— (${p.method})`;            // no grade yet
-        } else {
-          cell.textContent = "—";
-        }
-      } catch (e) {
-        cell.textContent = "—";                            // network/parse error
-      }
-    })
-  );
+  // Redraw the overview charts from the same per-subject statistics.
+  drawOverviewCharts(data.subject_stats);
 }
 
 // Refresh button next to recommendations re-loads the whole dashboard.
@@ -444,13 +351,18 @@ document
 
 
 /* ---------------------------------------------------------------------
- * Charts: draw three Chart.js charts from the per-subject statistics.
+ * Overview charts: study time per subject (bar) + distribution (pie).
  * ------------------------------------------------------------------- */
 
-function drawCharts(stats) {
-  // Defensive guard: if the Chart.js library did not load (e.g. the CDN is
-  // blocked by an ad-blocker or there is no internet), skip drawing instead
-  // of throwing a "Chart is not defined" error that would break the page.
+// A fixed palette so every subject keeps a consistent colour across charts.
+const PALETTE = [
+  "#2563eb", "#16a34a", "#f59e0b", "#dc2626", "#7c3aed", "#0891b2",
+  "#db2777", "#65a30d",
+];
+
+function drawOverviewCharts(stats) {
+  // Defensive guard: if Chart.js failed to load (CDN blocked / offline),
+  // skip drawing instead of throwing "Chart is not defined".
   if (typeof Chart === "undefined") {
     const note = document.getElementById("charts-empty");
     note.style.display = "block";
@@ -459,80 +371,215 @@ function drawCharts(stats) {
   }
 
   // Build parallel arrays from the stats objects.
-  const labels = stats.map((s) => s.subject_name);          // x-axis labels
-  const minutes = stats.map((s) => s.total_minutes);        // study minutes
-  // For grades, use null where there is no grade so the bar is simply absent.
-  const grades = stats.map((s) =>
-    s.avg_grade !== null && s.avg_grade !== undefined ? s.avg_grade : null
-  );
+  const labels = stats.map((s) => s.subject_name);     // x-axis labels
+  const minutes = stats.map((s) => s.total_minutes);   // study minutes
+  const colors = labels.map((_, i) => PALETTE[i % PALETTE.length]);
 
-  // If there is no study time at all and no grades, show the "no data" note.
+  // Show the "no data" note if there is no study time at all.
   const hasTime = minutes.some((m) => m > 0);
-  const hasGrades = grades.some((g) => g !== null);
-  document.getElementById("charts-empty").style.display =
-    hasTime || hasGrades ? "none" : "block";
-
-  // A fixed palette so every subject keeps a consistent colour.
-  const palette = [
-    "#2563eb", "#16a34a", "#f59e0b", "#dc2626", "#7c3aed", "#0891b2",
-    "#db2777", "#65a30d",
-  ];
-  const colors = labels.map((_, i) => palette[i % palette.length]);
+  document.getElementById("charts-empty").style.display = hasTime ? "none" : "block";
 
   // Destroy existing chart instances before recreating (avoids ghosting).
   if (chartTime) chartTime.destroy();
   if (chartDistribution) chartDistribution.destroy();
-  if (chartGrades) chartGrades.destroy();
 
-  // ----- Chart 1: bar chart of study minutes per subject -----
+  // ----- Bar chart: study minutes per subject -----
   chartTime = new Chart(document.getElementById("chart-time"), {
     type: "bar",
     data: {
       labels,
-      datasets: [{
-        label: "Minutes",
-        data: minutes,
-        backgroundColor: colors,
-      }],
+      datasets: [{ label: "Minutes", data: minutes, backgroundColor: colors }],
     },
     options: {
       responsive: true,
-      plugins: { legend: { display: false } },   // single dataset, no legend
+      plugins: { legend: { display: false } },
       scales: { y: { beginAtZero: true } },
     },
   });
 
-  // ----- Chart 2: pie chart of how total study time is distributed -----
+  // ----- Pie chart: distribution of total study time -----
   chartDistribution = new Chart(document.getElementById("chart-distribution"), {
     type: "pie",
     data: {
       labels,
-      datasets: [{
-        data: minutes,
-        backgroundColor: colors,
-      }],
+      datasets: [{ data: minutes, backgroundColor: colors }],
     },
     options: {
       responsive: true,
       plugins: { legend: { position: "bottom" } },
     },
   });
+}
 
-  // ----- Chart 3: bar chart of average grade per subject -----
-  chartGrades = new Chart(document.getElementById("chart-grades"), {
-    type: "bar",
+
+/* ---------------------------------------------------------------------
+ * ML model 1 — Study patterns (KMeans).
+ * Renders a scatter chart of sessions (hour of day vs minutes) coloured
+ * by cluster, a one-line headline insight, and a list of cluster summaries.
+ * ------------------------------------------------------------------- */
+
+async function loadPatterns() {
+  const data = await api.get("/api/patterns");
+  const insight = document.getElementById("patterns-insight");
+  const clusterBox = document.getElementById("patterns-clusters");
+  insight.innerHTML = "";
+  clusterBox.innerHTML = "";
+
+  // Not enough sessions yet → show the explanatory message, clear the chart.
+  if (!data.ok || !data.enough_data) {
+    insight.innerHTML =
+      `<div class="rec info">${escapeHtml(data.message || "Not enough data yet.")}</div>`;
+    if (chartPatterns) { chartPatterns.destroy(); chartPatterns = null; }
+    return;
+  }
+
+  // Headline insight: the most productive time of day.
+  const bt = data.best_time;
+  if (bt) {
+    insight.innerHTML =
+      `<div class="rec success">` +
+      `Your longest study sessions happen in the <strong>${escapeHtml(bt.time_of_day)}</strong> ` +
+      `(around ${String(bt.around_hour).padStart(2, "0")}:00), ` +
+      `averaging ${bt.avg_minutes} min. Plan demanding subjects then.` +
+      `</div>`;
+  }
+
+  // List each detected cluster as a small summary card.
+  for (const c of data.clusters) {
+    const div = document.createElement("div");
+    div.className = "cluster-item";
+    div.innerHTML =
+      `<span class="cluster-dot" style="background:${PALETTE[c.cluster % PALETTE.length]}"></span>` +
+      `<span><strong>${escapeHtml(c.time_of_day)}</strong> ` +
+      `(~${String(Math.round(c.avg_hour)).padStart(2, "0")}:00) — ` +
+      `${c.size} session(s), avg ${c.avg_minutes} min</span>`;
+    clusterBox.appendChild(div);
+  }
+
+  // Draw the scatter chart (only if Chart.js is available).
+  if (typeof Chart === "undefined") return;
+
+  // Group the points by cluster so each cluster is its own coloured dataset.
+  const byCluster = {};
+  for (const pt of data.points) {
+    (byCluster[pt.cluster] = byCluster[pt.cluster] || []).push({
+      x: pt.hour,            // x-axis: hour of day (0..23)
+      y: pt.minutes,         // y-axis: session length in minutes
+      subject: pt.subject,   // kept for the tooltip
+    });
+  }
+
+  const datasets = Object.keys(byCluster).map((cid) => ({
+    label: `Cluster ${Number(cid) + 1}`,
+    data: byCluster[cid],
+    backgroundColor: PALETTE[Number(cid) % PALETTE.length],
+    pointRadius: 5,
+  }));
+
+  if (chartPatterns) chartPatterns.destroy();
+  chartPatterns = new Chart(document.getElementById("chart-patterns"), {
+    type: "scatter",
+    data: { datasets },
+    options: {
+      responsive: true,
+      scales: {
+        x: {
+          title: { display: true, text: "Hour of day" },
+          min: 0, max: 24, ticks: { stepSize: 3 },
+        },
+        y: {
+          title: { display: true, text: "Session length (min)" },
+          beginAtZero: true,
+        },
+      },
+      plugins: {
+        legend: { position: "bottom" },
+        tooltip: {
+          callbacks: {
+            // Show subject + time + duration in the tooltip.
+            label: (ctx) => {
+              const p = ctx.raw;
+              return `${p.subject}: ${p.y} min at ${String(p.x).padStart(2, "0")}:00`;
+            },
+          },
+        },
+      },
+    },
+  });
+}
+
+
+/* ---------------------------------------------------------------------
+ * ML model 2 — Study forecast (Linear regression).
+ * Renders the weekly study-minutes series as a line plus a forecast point
+ * for next week, and a one-line trend insight.
+ * ------------------------------------------------------------------- */
+
+async function loadForecast() {
+  const data = await api.get("/api/forecast");
+  const insight = document.getElementById("forecast-insight");
+  insight.innerHTML = "";
+
+  // Not enough weekly data yet → show the message, clear the chart.
+  if (!data.ok || !data.enough_data) {
+    insight.innerHTML =
+      `<div class="rec info">${escapeHtml(data.message || "Not enough data yet.")}</div>`;
+    if (chartForecast) { chartForecast.destroy(); chartForecast = null; }
+    return;
+  }
+
+  // Trend insight sentence with a colour matching the direction.
+  const trendClass =
+    data.trend === "increasing" ? "success" :
+    data.trend === "decreasing" ? "warning" : "info";
+  insight.innerHTML =
+    `<div class="rec ${trendClass}">` +
+    `Weekly study time is <strong>${escapeHtml(data.trend)}</strong> ` +
+    `(${data.slope_per_week >= 0 ? "+" : ""}${data.slope_per_week} min/week). ` +
+    `Forecast for next week: <strong>${data.next_week_forecast} min</strong>.` +
+    `</div>`;
+
+  if (typeof Chart === "undefined") return;
+
+  // Build the labels (week labels + a "Next" label for the forecast point).
+  const labels = data.weeks.map((w) => w.label);
+  labels.push("Next");
+
+  // Actual minutes per week; the forecast slot stays null on this dataset.
+  const actual = data.weeks.map((w) => w.minutes);
+  actual.push(null);
+
+  // Forecast dataset: only the last point is set (so it appears as a marker).
+  const forecastSeries = data.weeks.map(() => null);
+  forecastSeries.push(data.next_week_forecast);
+
+  if (chartForecast) chartForecast.destroy();
+  chartForecast = new Chart(document.getElementById("chart-forecast"), {
+    type: "line",
     data: {
       labels,
-      datasets: [{
-        label: "Average grade",
-        data: grades,
-        backgroundColor: colors,
-      }],
+      datasets: [
+        {
+          label: "Actual minutes",
+          data: actual,
+          borderColor: "#2563eb",
+          backgroundColor: "#2563eb",
+          tension: 0.2,
+        },
+        {
+          label: "Forecast (next week)",
+          data: forecastSeries,
+          borderColor: "#16a34a",
+          backgroundColor: "#16a34a",
+          pointRadius: 6,
+          pointStyle: "rectRot",
+        },
+      ],
     },
     options: {
       responsive: true,
-      plugins: { legend: { display: false } },
-      scales: { y: { beginAtZero: true, max: 100 } },  // grades are 0..100
+      plugins: { legend: { position: "bottom" } },
+      scales: { y: { beginAtZero: true, title: { display: true, text: "Minutes" } } },
     },
   });
 }
@@ -555,10 +602,11 @@ function escapeHtml(s) {
 // Reload every section of the dashboard in a sensible order.
 async function reloadAll() {
   await loadPeriod();           // banner + finished notification
-  await loadSubjects();         // subjects list + dropdowns
+  await loadSubjects();         // subjects list + dropdown
   await loadRecords();          // study records table
-  await loadGrades();           // grades table
-  await loadRecommendations();  // recommendations + stats + predictions + charts
+  await loadRecommendations();  // recommendations + stats + overview charts
+  await loadPatterns();         // ML 1: KMeans patterns
+  await loadForecast();         // ML 2: regression forecast
 }
 
 

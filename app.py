@@ -4,7 +4,7 @@ Flask backend for the Study Tracker web application.
 This file wires together everything the browser talks to:
   * HTML page routes (login, register, setup, dashboard).
   * A small JSON API used by the dashboard's JavaScript (subjects, study
-    records, grades, ML predictions, recommendations, analysis period).
+    records, ML patterns/forecast, recommendations, analysis period).
 
 Page routes:
   GET  /                       -> redirect to dashboard or login
@@ -23,10 +23,8 @@ JSON API:
   POST   /api/records                  {subject_id, started_at, ended_at, duration_sec}
   GET    /api/records[?subject_id=]
 
-  POST   /api/grades                   {subject_id, grade, note?}
-  GET    /api/grades[?subject_id=]
-
-  GET    /api/predict/<subject_id>     -> predicted grade
+  GET    /api/patterns                 -> KMeans study-session patterns
+  GET    /api/forecast                 -> linear-regression weekly time forecast
   GET    /api/recommendations          -> recommendations + per-subject stats
                                            (gated by analysis period)
   GET    /api/period                   -> analysis period status
@@ -51,7 +49,11 @@ from flask import (
 from werkzeug.security import check_password_hash, generate_password_hash
 
 import database as db                                   # our SQLite data-access layer
-from ml_model import generate_recommendations, predict_grade  # the ML/advice functions
+from ml_model import (                                    # the ML / advice functions
+    analyze_patterns,         # KMeans clustering of study sessions
+    forecast_study_time,      # linear-regression weekly forecast
+    generate_recommendations, # rule-based time recommendations
+)
 
 
 # Create the Flask application instance.
@@ -260,7 +262,7 @@ def api_add_subject():
 @app.delete("/api/subjects/<int:subject_id>")
 @login_required
 def api_delete_subject(subject_id: int):
-    """Delete a subject (and, via cascade, its records and grades)."""
+    """Delete a subject (and, via cascade, its study records)."""
     ok = db.delete_subject(current_user_id(), subject_id)
     if not ok:                                            # nothing was deleted
         return jsonify({"ok": False, "error": "Subject not found"}), 404
@@ -311,46 +313,20 @@ def api_list_records():
     return jsonify({"ok": True, "records": records})
 
 
-# ---------- API: grades ----------
-
-@app.post("/api/grades")
-@login_required
-def api_add_grade():
-    """Store a grade (0..100) the student received for a subject."""
-    data = request.get_json(silent=True) or {}
-    try:
-        subject_id = int(data["subject_id"])             # which subject
-        grade = float(data["grade"])                     # the grade value
-        note = str(data.get("note", "")).strip()         # optional label
-    except (KeyError, ValueError, TypeError):
-        return jsonify({"ok": False, "error": "Invalid payload"}), 400
-
-    if not (0.0 <= grade <= 100.0):                       # grades are on a 0..100 scale
-        return jsonify({"ok": False, "error": "Grade must be between 0 and 100"}), 400
-    if not db.get_subject(current_user_id(), subject_id):  # subject must belong to user
-        return jsonify({"ok": False, "error": "Subject not found"}), 404
-    if len(note) > 120:                                  # keep notes short
-        return jsonify({"ok": False, "error": "Note is too long"}), 400
-
-    gid = db.add_grade(current_user_id(), subject_id, grade, note)  # insert
-    return jsonify({"ok": True, "id": gid})
-
-
-@app.get("/api/grades")
-@login_required
-def api_list_grades():
-    """List grades, optionally filtered to a single subject."""
-    subject_id = request.args.get("subject_id", type=int)
-    return jsonify({"ok": True, "grades": db.get_grades(current_user_id(), subject_id)})
-
-
 # ---------- API: ML & period ----------
 
-@app.get("/api/predict/<int:subject_id>")
+@app.get("/api/patterns")
 @login_required
-def api_predict(subject_id: int):
-    """Return the ML-predicted next grade for one subject."""
-    return jsonify(predict_grade(current_user_id(), subject_id))
+def api_patterns():
+    """Return KMeans study-session patterns (productive time, clusters)."""
+    return jsonify(analyze_patterns(current_user_id()))
+
+
+@app.get("/api/forecast")
+@login_required
+def api_forecast():
+    """Return the linear-regression weekly study-time forecast."""
+    return jsonify(forecast_study_time(current_user_id()))
 
 
 @app.get("/api/recommendations")

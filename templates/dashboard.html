@@ -1,14 +1,14 @@
 {# dashboard.html — the main application page.
-   It only renders empty containers; all data (subjects, timer, grades,
-   recommendations, stats, charts) is fetched and filled in by static/app.js
-   through the JSON API. Sections from top to bottom:
+   It only renders empty containers; all data (subjects, timer,
+   recommendations, ML patterns, ML forecast, charts) is fetched and filled in
+   by static/app.js through the JSON API. Sections from top to bottom:
      - period-finished notification + period banner
-     - subjects / timer / add-grade (3-column grid)
+     - subjects + timer (2-column grid)
      - recommendations
-     - charts (Chart.js)
-     - statistics + grade prediction table
-     - recent study records table
-     - recent grades table #}
+     - Study patterns  (KMeans ML)
+     - Study forecast  (LinearRegression ML)
+     - visual overview (time charts)
+     - recent study records table #}
 {% extends "base.html" %}
 {% block title %}Dashboard - Study Tracker{% endblock %}
 {% block content %}
@@ -24,7 +24,7 @@
 
 <div id="period-banner" class="period-banner"></div>
 
-<section class="grid">
+<section class="grid grid-2">
 
   <!-- LEFT: subjects + add -->
   <div class="card">
@@ -37,7 +37,7 @@
     <ul id="subject-list" class="subject-list"></ul>
   </div>
 
-  <!-- MIDDLE: timer -->
+  <!-- RIGHT: timer -->
   <div class="card">
     <h2>Study timer</h2>
     <div class="timer-block">
@@ -53,31 +53,6 @@
     </div>
   </div>
 
-  <!-- RIGHT: add grade -->
-  <div class="card">
-    <h2>Add grade <span class="badge-optional">optional</span></h2>
-    <p class="muted small">
-      This field is <strong>optional</strong>. For the best predictions,
-      enter your <strong>final grades from the previous year</strong> for each
-      subject (0–100). The ML model uses the link between your study time and
-      these grades to predict your next grade.
-    </p>
-    <form id="add-grade-form" class="form">
-      <label>Subject
-        <select id="grade-subject"></select>
-      </label>
-      <label>Grade (0–100)
-        <input type="number" id="grade-value" min="0" max="100" step="0.1"
-               placeholder="e.g. 85 (last year's final)">
-      </label>
-      <label>Note (optional)
-        <input type="text" id="grade-note" maxlength="120"
-               placeholder="e.g. Final 2023/24, Midterm">
-      </label>
-      <button class="btn btn-primary" type="submit">Save grade</button>
-    </form>
-  </div>
-
 </section>
 
 <!-- Recommendations -->
@@ -87,10 +62,45 @@
   <button id="btn-refresh-recs" class="btn btn-ghost btn-small">Refresh</button>
 </section>
 
-<!-- Charts -->
+<!-- ML 1: Study patterns (KMeans) -->
+<section class="card">
+  <h2>Study patterns <span class="badge-ml">ML · KMeans</span></h2>
+  <p class="muted small">
+    The app groups your individual study sessions by time of day, weekday and
+    length using <strong>KMeans clustering</strong> to find your behaviour
+    patterns.
+  </p>
+  <div id="patterns-insight" class="insight"></div>
+  <div class="charts-grid charts-grid-2">
+    <div class="chart-box">
+      <h3 class="chart-title">Sessions by time of day (coloured by cluster)</h3>
+      <canvas id="chart-patterns"></canvas>
+    </div>
+    <div class="chart-box">
+      <h3 class="chart-title">Detected clusters</h3>
+      <div id="patterns-clusters" class="cluster-list"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ML 2: Study forecast (Linear Regression) -->
+<section class="card">
+  <h2>Study forecast <span class="badge-ml">ML · Linear Regression</span></h2>
+  <p class="muted small">
+    A <strong>linear-regression</strong> model fits your weekly study minutes
+    to find the trend and forecast next week.
+  </p>
+  <div id="forecast-insight" class="insight"></div>
+  <div class="chart-box chart-box-wide">
+    <h3 class="chart-title">Weekly study minutes + trend</h3>
+    <canvas id="chart-forecast"></canvas>
+  </div>
+</section>
+
+<!-- Visual overview (time charts) -->
 <section class="card">
   <h2>Visual overview</h2>
-  <div class="charts-grid">
+  <div class="charts-grid charts-grid-2">
     <div class="chart-box">
       <h3 class="chart-title">Study time per subject (minutes)</h3>
       <canvas id="chart-time"></canvas>
@@ -99,19 +109,15 @@
       <h3 class="chart-title">Time distribution</h3>
       <canvas id="chart-distribution"></canvas>
     </div>
-    <div class="chart-box">
-      <h3 class="chart-title">Average grade per subject</h3>
-      <canvas id="chart-grades"></canvas>
-    </div>
   </div>
   <p id="charts-empty" class="muted small" style="display:none;">
-    No data yet. Start a study session or add a grade to see charts.
+    No data yet. Start a study session to see charts.
   </p>
 </section>
 
-<!-- Stats + grade prediction -->
+<!-- Per-subject statistics -->
 <section class="card">
-  <h2>Subject statistics &amp; grade prediction</h2>
+  <h2>Subject statistics</h2>
   <div class="table-wrap">
     <table class="data-table" id="stats-table">
       <thead>
@@ -119,9 +125,6 @@
           <th>Subject</th>
           <th>Sessions</th>
           <th>Total study (min)</th>
-          <th>Grades entered</th>
-          <th>Avg grade</th>
-          <th>Predicted next grade</th>
         </tr>
       </thead>
       <tbody></tbody>
@@ -129,7 +132,7 @@
   </div>
 </section>
 
-<!-- Records -->
+<!-- Recent study records -->
 <section class="card">
   <h2>Recent study records</h2>
   <div class="table-wrap">
@@ -140,24 +143,6 @@
           <th>Started</th>
           <th>Ended</th>
           <th>Duration</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  </div>
-</section>
-
-<!-- Grades -->
-<section class="card">
-  <h2>Recent grades</h2>
-  <div class="table-wrap">
-    <table class="data-table" id="grades-table">
-      <thead>
-        <tr>
-          <th>Subject</th>
-          <th>Grade</th>
-          <th>Note</th>
-          <th>Date</th>
         </tr>
       </thead>
       <tbody></tbody>

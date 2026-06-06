@@ -257,35 +257,50 @@ input:focus, select:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* ---- "optional" badge next to a heading ---- */
-.badge-optional {
+/* ---- "ML" badge next to a section heading ---- */
+.badge-ml {
   display: inline-block;
   font-size: .68rem;
-  font-weight: 600;
+  font-weight: 700;
   text-transform: uppercase;
   letter-spacing: .5px;
-  color: #6b7280;
-  background: #f3f4f6;
-  border: 1px solid #e5e7eb;
+  color: #5b21b6;                      /* purple text */
+  background: #f5f3ff;                  /* light purple background */
+  border: 1px solid #ddd6fe;
   border-radius: 999px;
-  padding: 2px 8px;
+  padding: 2px 10px;
   vertical-align: middle;
-  margin-left: 6px;
+  margin-left: 8px;
+}
+
+/* ---- 2-column grid (subjects + timer) ---- */
+.grid-2 {
+  grid-template-columns: 1fr 1fr;      /* override the default 3-column grid */
+}
+@media (max-width: 980px) {
+  .grid-2 { grid-template-columns: 1fr; }  /* stack on small screens */
 }
 
 /* ---- Charts ---- */
 .charts-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;  /* three charts side by side */
+  grid-template-columns: 1fr 1fr 1fr;  /* three charts side by side (default) */
   gap: 18px;
 }
+.charts-grid-2 {
+  grid-template-columns: 1fr 1fr;      /* two charts side by side */
+}
 @media (max-width: 980px) {
-  .charts-grid { grid-template-columns: 1fr; }  /* stack on small screens */
+  .charts-grid,
+  .charts-grid-2 { grid-template-columns: 1fr; }  /* stack on small screens */
 }
 .chart-box {
   background: #f9fafb;
   border-radius: 10px;
   padding: 14px;
+}
+.chart-box-wide {                       /* full-width chart (forecast line) */
+  margin-top: 8px;
 }
 .chart-title {
   margin: 0 0 10px;
@@ -296,6 +311,35 @@ input:focus, select:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37
 /* Give the canvases a fixed height so Chart.js has room to draw into. */
 .chart-box canvas {
   max-height: 260px;
+}
+
+/* ---- ML insight line (above each model's chart) ---- */
+.insight {
+  margin: 10px 0 14px;
+}
+
+/* ---- KMeans cluster summary list ---- */
+.cluster-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  justify-content: center;
+}
+.cluster-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: .9rem;
+}
+.cluster-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
 
 /* ---- Utility ---- */

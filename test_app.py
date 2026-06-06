@@ -80,41 +80,42 @@ with app.test_client() as c:
     assert r.get_json()["ok"]
     print("OK: added study record")
 
-    # ----- Add grade -----
-    r = c.post("/api/grades", json={"subject_id": sid, "grade": 78.5, "note": "Quiz 1"})
-    must(r, "add grade")
-    assert r.get_json()["ok"]
-    print("OK: added grade")
+    # ----- Patterns (KMeans) with too little data -> enough_data False -----
+    r = c.get("/api/patterns")
+    pat = r.get_json()
+    assert pat["ok"] and pat["enough_data"] is False
+    print("OK: patterns report 'not enough data' with 1 session")
 
-    # ----- Grade prediction with only 1 grade => average fallback -----
-    r = c.get(f"/api/predict/{sid}")
-    pred = r.get_json()
-    assert pred["ok"]
-    assert pred["predicted_grade"] == 78.5
-    assert "average" in pred["method"].lower()
-    print(f"OK: grade prediction = {pred['predicted_grade']} ({pred['method']})")
+    # ----- Add enough sessions across different hours/days for KMeans -----
+    samples = [
+        ("2025-05-01T09:00:00", "2025-05-01T09:40:00", 2400),
+        ("2025-05-02T10:00:00", "2025-05-02T10:30:00", 1800),
+        ("2025-05-05T19:00:00", "2025-05-05T20:30:00", 5400),
+        ("2025-05-06T20:00:00", "2025-05-06T21:30:00", 5400),
+        ("2025-05-08T14:00:00", "2025-05-08T14:20:00", 1200),
+        ("2025-05-09T21:00:00", "2025-05-09T22:00:00", 3600),
+    ]
+    for st, en, dur in samples:
+        c.post("/api/records", json={
+            "subject_id": sid, "started_at": st, "ended_at": en, "duration_sec": dur,
+        })
 
-    # ----- Add 2 more grades to enable regression -----
-    c.post("/api/grades", json={"subject_id": sid, "grade": 82.0, "note": "Quiz 2"})
-    c.post("/api/grades", json={"subject_id": sid, "grade": 90.0, "note": "Quiz 3"})
-    # And another study record so cumulative time differs at each grade
-    c.post("/api/records", json={
-        "subject_id": sid,
-        "started_at": "2025-05-28T10:00:00",
-        "ended_at":   "2025-05-28T11:00:00",
-        "duration_sec": 3600,
-    })
+    r = c.get("/api/patterns")
+    pat = r.get_json()
+    assert pat["ok"] and pat["enough_data"] is True
+    assert pat["best_time"] is not None
+    assert len(pat["clusters"]) >= 1
+    print(f"OK: KMeans patterns ({len(pat['clusters'])} clusters, "
+          f"best time = {pat['best_time']['time_of_day']})")
 
-    r = c.get(f"/api/predict/{sid}")
-    pred = r.get_json()
-    assert pred["ok"]
-    assert pred["predicted_grade"] is not None
-    print(f"OK: regression prediction = {pred['predicted_grade']} ({pred['method']})")
-
-    # ----- Grade out of range rejected -----
-    r = c.post("/api/grades", json={"subject_id": sid, "grade": 150})
-    assert r.status_code == 400
-    print("OK: out-of-range grade rejected")
+    # ----- Forecast (linear regression) over multiple weeks -----
+    r = c.get("/api/forecast")
+    fc = r.get_json()
+    assert fc["ok"] and fc["enough_data"] is True
+    assert fc["next_week_forecast"] is not None
+    assert fc["trend"] in ("increasing", "decreasing", "stable")
+    print(f"OK: forecast trend = {fc['trend']}, "
+          f"next week = {fc['next_week_forecast']} min")
 
     # ----- Login flow -----
     c.get("/logout")

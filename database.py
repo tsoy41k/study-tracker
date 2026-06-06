@@ -8,8 +8,9 @@ Tables:
   users          - registered students (numeric id + password hash + analysis period)
   subjects       - subjects per user (6 defaults auto-created on register)
   study_records  - completed study sessions (timer results)
-  grades         - grades (0-100) entered manually per subject; used by ML
-                   to predict the next grade based on accumulated study time.
+
+The ML models work purely on study_records (time data), so there is no
+grades table.
 """
 
 import os                                   # read the optional DB_PATH env var
@@ -113,27 +114,9 @@ def init_db():
             """
         )
 
-        # --- grades: one row per grade the student enters (0..100) ---
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS grades (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id     INTEGER NOT NULL,
-                subject_id  INTEGER NOT NULL,
-                grade       REAL NOT NULL,                  -- 0..100
-                note        TEXT,                           -- optional: "midterm", "quiz", etc.
-                created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-                FOREIGN KEY (subject_id) REFERENCES subjects(id) ON DELETE CASCADE
-            );
-            """
-        )
-
         # Indexes speed up the most common lookups (by user / by subject).
         cur.execute("CREATE INDEX IF NOT EXISTS idx_records_user    ON study_records(user_id);")
         cur.execute("CREATE INDEX IF NOT EXISTS idx_records_subject ON study_records(subject_id);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_grades_user     ON grades(user_id);")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_grades_subject  ON grades(subject_id);")
 
 
 # ---------- Users ----------
@@ -253,7 +236,7 @@ def get_subject(user_id: int, subject_id: int):
 
 
 def delete_subject(user_id: int, subject_id: int) -> bool:
-    """Delete a subject (cascades to its records/grades). Return True if deleted."""
+    """Delete a subject (cascades to its study records). Return True if deleted."""
     with db_cursor() as cur:
         cur.execute(
             "DELETE FROM subjects WHERE id = ? AND user_id = ?",
@@ -311,53 +294,6 @@ def get_records(user_id: int, subject_id: int | None = None, limit: int = 200):
                 LIMIT ?
                 """,
                 (user_id, subject_id, limit),
-            )
-        return [dict(r) for r in cur.fetchall()]
-
-
-# ---------- Grades ----------
-
-def add_grade(user_id: int, subject_id: int, grade: float, note: str = "") -> int:
-    """Insert one grade (0..100) for a subject and return its id."""
-    with db_cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO grades (user_id, subject_id, grade, note)
-            VALUES (?, ?, ?, ?)
-            """,
-            (user_id, subject_id, grade, note or ""),   # store "" instead of None
-        )
-        return cur.lastrowid
-
-
-def get_grades(user_id: int, subject_id: int | None = None):
-    """
-    Return grades joined with the subject name.
-    For all subjects: newest first (nice for the table).
-    For one subject: oldest first (chronological order the ML model wants).
-    """
-    with db_cursor() as cur:
-        if subject_id is None:
-            cur.execute(
-                """
-                SELECT g.*, s.name AS subject_name
-                FROM grades g
-                JOIN subjects s ON s.id = g.subject_id
-                WHERE g.user_id = ?
-                ORDER BY g.created_at DESC
-                """,
-                (user_id,),
-            )
-        else:
-            cur.execute(
-                """
-                SELECT g.*, s.name AS subject_name
-                FROM grades g
-                JOIN subjects s ON s.id = g.subject_id
-                WHERE g.user_id = ? AND g.subject_id = ?
-                ORDER BY g.created_at ASC
-                """,
-                (user_id, subject_id),
             )
         return [dict(r) for r in cur.fetchall()]
 
