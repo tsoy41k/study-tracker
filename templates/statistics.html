@@ -1,0 +1,62 @@
+{# statistics.html — overall study analytics.
+   All data is loaded from /api/statistics by statistics.js. Shows headline
+   stat cards, a per-subject breakdown chart, and a daily study-time chart. #}
+{% extends "base.html" %}
+{% block title %}Statistics - Study Tracker{% endblock %}
+{% block content %}
+
+<h1 class="page-title">Statistics</h1>
+
+<!-- Headline stat cards -->
+<section class="stat-cards" id="stat-cards">
+  <div class="stat-card">
+    <div class="stat-value" id="stat-total">—</div>
+    <div class="stat-label">Total study time</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" id="stat-sessions">—</div>
+    <div class="stat-label">Sessions</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" id="stat-avg-session">—</div>
+    <div class="stat-label">Avg session</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" id="stat-avg-day">—</div>
+    <div class="stat-label">Avg / active day</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" id="stat-streak">—</div>
+    <div class="stat-label">Current streak</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-value" id="stat-top">—</div>
+    <div class="stat-label">Top subject</div>
+  </div>
+</section>
+
+<p id="stat-empty" class="muted" style="display:none;">
+  No study data yet. Start the timer on the dashboard to see your statistics.
+</p>
+
+<!-- Charts -->
+<section class="card">
+  <h2>Time per subject</h2>
+  <div class="chart-box">
+    <canvas id="chart-subjects"></canvas>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Daily study time</h2>
+  <div class="chart-box chart-box-wide">
+    <canvas id="chart-daily"></canvas>
+  </div>
+</section>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script src="{{ url_for('static', filename='statistics.js') }}"></script>
+{% endblock %}

@@ -1,0 +1,51 @@
+{# history.html — full study-session history with filters.
+   Data is loaded from /api/history by history.js. The user can filter by
+   subject and by a date range; a summary line shows the filtered totals. #}
+{% extends "base.html" %}
+{% block title %}History - Study Tracker{% endblock %}
+{% block content %}
+
+<h1 class="page-title">Study history</h1>
+
+<!-- Filters -->
+<section class="card">
+  <form id="history-filters" class="filters">
+    <label>Subject
+      <select id="filter-subject">
+        <option value="">All subjects</option>
+      </select>
+    </label>
+    <label>From
+      <input type="date" id="filter-from">
+    </label>
+    <label>To
+      <input type="date" id="filter-to">
+    </label>
+    <button class="btn btn-primary" type="submit">Apply</button>
+    <button class="btn btn-ghost" type="button" id="filter-reset">Reset</button>
+  </form>
+  <p id="history-summary" class="muted small"></p>
+</section>
+
+<!-- Results table -->
+<section class="card">
+  <div class="table-wrap">
+    <table class="data-table" id="history-table">
+      <thead>
+        <tr>
+          <th>Subject</th>
+          <th>Started</th>
+          <th>Ended</th>
+          <th>Duration</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='history.js') }}"></script>
+{% endblock %}

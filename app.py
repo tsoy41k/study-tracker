@@ -31,7 +31,7 @@ JSON API:
 """
 
 import os                                  # read environment variables (SECRET_KEY)
-from datetime import datetime              # parse/normalise ISO datetime strings
+from datetime import datetime, timedelta   # parse/normalise ISO datetimes; streak math
 from functools import wraps                # preserve function metadata in decorators
 
 # Flask components we use throughout the app.
@@ -229,7 +229,24 @@ def setup():
 @setup_required      # ...and must have configured the analysis period
 def dashboard():
     """Render the main dashboard page (all data is loaded via the JSON API)."""
-    return render_template("dashboard.html", user_id=current_user_id())
+    return render_template("dashboard.html", user_id=current_user_id(),
+                           active_page="dashboard")
+
+
+@app.route("/statistics")
+@login_required
+@setup_required
+def statistics():
+    """Render the statistics page (data loaded via /api/statistics)."""
+    return render_template("statistics.html", active_page="statistics")
+
+
+@app.route("/history")
+@login_required
+@setup_required
+def history():
+    """Render the full study-history page (data loaded via /api/history)."""
+    return render_template("history.html", active_page="history")
 
 
 # ---------- API: subjects ----------
@@ -345,6 +362,144 @@ def api_period():
         session.clear()
         return jsonify({"ok": False, "error": "auth required"}), 401
     return jsonify({"ok": True, "period": db.analysis_status(user)})
+
+
+# ---------- API: statistics & history ----------
+
+def _parse_record_dt(value: str) -> datetime:
+    """Parse a stored timestamp (tolerates both 'T' and space separators)."""
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+
+
+@app.get("/api/statistics")
+@login_required
+def api_statistics():
+    """
+    Aggregate overall study statistics for the Statistics page:
+      total time, session count, averages, top subject, current streak,
+      per-subject breakdown and a daily time series for the chart.
+    """
+    records = db.get_records(current_user_id(), limit=100000)
+
+    # Empty state: nothing studied yet.
+    if not records:
+        return jsonify({
+            "ok": True,
+            "has_data": False,
+            "total_minutes": 0,
+            "total_sessions": 0,
+            "avg_session_minutes": 0,
+            "active_days": 0,
+            "avg_per_active_day": 0,
+            "current_streak": 0,
+            "top_subject": None,
+            "per_subject": [],
+            "daily": [],
+        })
+
+    total_sec = sum(r["duration_sec"] for r in records)         # all time studied
+    total_min = total_sec / 60.0
+    total_sessions = len(records)
+
+    # Group minutes by calendar day and by subject.
+    by_day = {}        # "YYYY-MM-DD" -> minutes
+    by_subject = {}    # subject name -> minutes
+    for r in records:
+        day = _parse_record_dt(r["started_at"]).date().isoformat()
+        by_day[day] = by_day.get(day, 0) + r["duration_sec"] / 60.0
+        name = r["subject_name"]
+        by_subject[name] = by_subject.get(name, 0) + r["duration_sec"] / 60.0
+
+    active_days = len(by_day)                                   # distinct study days
+    avg_session = total_min / total_sessions
+    avg_per_day = total_min / active_days if active_days else 0
+
+    # Top subject by total time.
+    top_name = max(by_subject, key=by_subject.get)
+    top_subject = {"name": top_name, "minutes": round(by_subject[top_name], 1)}
+
+    # Current streak: consecutive days (ending today or yesterday) with study.
+    studied_days = set(by_day.keys())
+    streak = 0
+    cursor = datetime.now().date()
+    if cursor.isoformat() not in studied_days:
+        cursor = cursor - timedelta(days=1)                    # allow "ends yesterday"
+    while cursor.isoformat() in studied_days:
+        streak += 1
+        cursor = cursor - timedelta(days=1)
+
+    # Per-subject breakdown (sorted by time, descending).
+    per_subject = [
+        {"name": n, "minutes": round(m, 1)}
+        for n, m in sorted(by_subject.items(), key=lambda kv: kv[1], reverse=True)
+    ]
+
+    # Daily series (sorted by date) for the line chart.
+    daily = [
+        {"date": d, "minutes": round(by_day[d], 1)}
+        for d in sorted(by_day.keys())
+    ]
+
+    return jsonify({
+        "ok": True,
+        "has_data": True,
+        "total_minutes": round(total_min, 1),
+        "total_sessions": total_sessions,
+        "avg_session_minutes": round(avg_session, 1),
+        "active_days": active_days,
+        "avg_per_active_day": round(avg_per_day, 1),
+        "current_streak": streak,
+        "top_subject": top_subject,
+        "per_subject": per_subject,
+        "daily": daily,
+    })
+
+
+@app.get("/api/history")
+@login_required
+def api_history():
+    """
+    Return study records for the History page, with optional filters:
+      ?subject_id=  -> only that subject
+      ?from=YYYY-MM-DD, ?to=YYYY-MM-DD -> only sessions whose start date is in range
+    Also returns a summary (count + total minutes) for the filtered set.
+    """
+    subject_id = request.args.get("subject_id", type=int)        # optional subject filter
+    date_from = request.args.get("from", "").strip()             # optional start date
+    date_to = request.args.get("to", "").strip()                 # optional end date
+
+    # Start from all records (optionally narrowed to one subject by the DB).
+    records = db.get_records(current_user_id(), subject_id=subject_id, limit=100000)
+
+    # Apply the date filters in Python (start date inclusive on both ends).
+    def in_range(rec):
+        d = _parse_record_dt(rec["started_at"]).date()
+        if date_from:
+            try:
+                if d < datetime.fromisoformat(date_from).date():
+                    return False
+            except ValueError:
+                pass
+        if date_to:
+            try:
+                if d > datetime.fromisoformat(date_to).date():
+                    return False
+            except ValueError:
+                pass
+        return True
+
+    filtered = [r for r in records if in_range(r)]
+
+    total_min = sum(r["duration_sec"] for r in filtered) / 60.0
+    return jsonify({
+        "ok": True,
+        "records": filtered,
+        "count": len(filtered),
+        "total_minutes": round(total_min, 1),
+    })
 
 
 # ---------- Entry point ----------

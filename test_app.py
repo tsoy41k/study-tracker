@@ -117,6 +117,42 @@ with app.test_client() as c:
     print(f"OK: forecast trend = {fc['trend']}, "
           f"next week = {fc['next_week_forecast']} min")
 
+    # ----- Statistics page data -----
+    r = c.get("/api/statistics")
+    stt = r.get_json()
+    assert stt["ok"] and stt["has_data"] is True
+    assert stt["total_sessions"] >= 7
+    assert stt["top_subject"] is not None
+    assert len(stt["daily"]) >= 1
+    print(f"OK: statistics ({stt['total_sessions']} sessions, "
+          f"top = {stt['top_subject']['name']})")
+
+    # ----- Statistics page renders -----
+    r = c.get("/statistics")
+    must(r, "statistics page")
+    assert b"Statistics" in r.data
+    print("OK: statistics page renders")
+
+    # ----- History endpoint (no filter) -----
+    r = c.get("/api/history")
+    h = r.get_json()
+    assert h["ok"] and h["count"] >= 7
+    print(f"OK: history ({h['count']} sessions, {h['total_minutes']} min)")
+
+    # ----- History endpoint with date filter -----
+    r = c.get("/api/history?from=2025-05-01&to=2025-05-02")
+    h = r.get_json()
+    assert h["ok"]
+    assert all("2025-05-01" in rec["started_at"] or "2025-05-02" in rec["started_at"]
+               for rec in h["records"])
+    print(f"OK: history date filter ({h['count']} sessions in range)")
+
+    # ----- History page renders -----
+    r = c.get("/history")
+    must(r, "history page")
+    assert b"Study history" in r.data
+    print("OK: history page renders")
+
     # ----- Login flow -----
     c.get("/logout")
     r = c.post("/login", data={"user_id": "12345", "password": "wrong"})

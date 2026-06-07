@@ -23,6 +23,14 @@
     <a href="{{ url_for('index') }}" class="brand">Study Tracker</a>
     <nav>
       {% if session.get('user_id') %}   {# logged-in view #}
+        {# Page links. `active_page` is passed by each view so the current
+           link can be highlighted. #}
+        <a href="{{ url_for('dashboard') }}"
+           class="nav-link {{ 'active' if active_page == 'dashboard' }}">Dashboard</a>
+        <a href="{{ url_for('statistics') }}"
+           class="nav-link {{ 'active' if active_page == 'statistics' }}">Statistics</a>
+        <a href="{{ url_for('history') }}"
+           class="nav-link {{ 'active' if active_page == 'history' }}">History</a>
         <span class="user-pill">ID: {{ session['user_id'] }}</span>
         <a href="{{ url_for('logout') }}" class="btn btn-ghost">Log out</a>
       {% else %}                          {# logged-out view #}
