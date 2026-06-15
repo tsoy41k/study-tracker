@@ -314,9 +314,13 @@ def api_add_record():
         return jsonify({"ok": False, "error": "Subject not found"}), 404
 
     try:
-        # Normalise both timestamps to "YYYY-MM-DD HH:MM:SS" for storage.
-        started_at = datetime.fromisoformat(started_at).isoformat(sep=" ", timespec="seconds")
-        ended_at   = datetime.fromisoformat(ended_at).isoformat(sep=" ", timespec="seconds")
+        # The browser sends ISO strings ending in "Z" (UTC), which older
+        # Python versions (< 3.11) cannot parse. Replace "Z" with "+00:00"
+        # so datetime.fromisoformat works on every Python version.
+        started_at = datetime.fromisoformat(started_at.replace("Z", "+00:00")) \
+            .isoformat(sep=" ", timespec="seconds")
+        ended_at = datetime.fromisoformat(ended_at.replace("Z", "+00:00")) \
+            .isoformat(sep=" ", timespec="seconds")
     except ValueError:
         return jsonify({"ok": False, "error": "Bad datetime format"}), 400
 
