@@ -298,7 +298,84 @@ def get_records(user_id: int, subject_id: int | None = None, limit: int = 200):
         return [dict(r) for r in cur.fetchall()]
 
 
+# ---------- Built-in demo account ----------
+
+# A permanent demo account that is (re)created on every startup, so it always
+# exists even on hosting where the database file is reset (e.g. Render free tier).
+DEMO_USER_ID = 111            # login ID
+DEMO_PASSWORD = "111"         # login password
+DEMO_PERIOD_DAYS = 0          # 0 = immediate mode → recommendations/ML work at once
+
+
+def seed_demo_account():
+    """
+    Ensure the built-in demo account (ID 111 / password 111) exists, configured
+    in immediate mode and pre-filled with realistic study sessions so the ML
+    models (KMeans patterns + regression forecast) and recommendations produce
+    results straight away. Safe to call on every startup: it only seeds once.
+    """
+    # Imported here (not at the top) to avoid a circular import: werkzeug is
+    # only needed for this helper.
+    from datetime import datetime, timedelta
+    from werkzeug.security import generate_password_hash
+
+    # If the demo user already exists, do nothing (avoid duplicate data).
+    if get_user(DEMO_USER_ID) is not None:
+        return
+
+    # 1) Create the user (this also auto-creates the 6 default subjects).
+    create_user(DEMO_USER_ID, generate_password_hash(DEMO_PASSWORD))
+
+    # 2) Put it straight into immediate mode so nothing is locked.
+    set_analysis_period(DEMO_USER_ID, DEMO_PERIOD_DAYS)
+
+    # 3) Load the subject ids we just created.
+    subjects = get_subjects(DEMO_USER_ID)
+    sid = {s["name"]: s["id"] for s in subjects}
+
+    # 4) Build demo sessions spread across the last ~3 weeks and across
+    #    different times of day, so KMeans finds clusters and the weekly
+    #    regression has several points to fit a trend.
+    #    Each entry: (subject name, days_ago, hour, duration_minutes).
+    plan = [
+        # ~3 weeks ago
+        ("Internet of Things",                       20,  9, 40),
+        ("Digital Marketing",                        19, 10, 30),
+        ("System analysis and design",               18, 20, 75),
+        # ~2 weeks ago
+        ("Internet of Things",                       13, 19, 90),
+        ("Distributed systems and cloud computing",  12, 21, 60),
+        ("Digital Marketing",                        11, 14, 25),
+        ("System analysis and design",               10, 20, 80),
+        # ~1 week ago
+        ("Internet of Things",                        6, 19, 95),
+        ("Technology law",                            5, 11, 35),
+        ("Distributed systems and cloud computing",   4, 20, 70),
+        ("System analysis and design",                3, 21, 85),
+        # this week
+        ("Internet of Things",                        2, 18, 100),
+        ("Digital Marketing",                         1, 15, 20),
+    ]
+
+    now = datetime.now()
+    for name, days_ago, hour, dur_min in plan:
+        if name not in sid:
+            continue
+        start = (now - timedelta(days=days_ago)).replace(
+            hour=hour, minute=0, second=0, microsecond=0
+        )
+        end = start + timedelta(minutes=dur_min)
+        add_record(
+            DEMO_USER_ID,
+            sid[name],
+            start.isoformat(sep=" ", timespec="seconds"),
+            end.isoformat(sep=" ", timespec="seconds"),
+            dur_min * 60,                      # duration in seconds
+        )
+
+
 # Running this file directly just (re)creates the schema — handy for setup.
 if __name__ == "__main__":
     init_db()
+    seed_demo_account()
     print(f"Database initialized at: {DB_PATH}")

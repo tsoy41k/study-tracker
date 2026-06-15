@@ -65,6 +65,10 @@ app.secret_key = os.environ.get("SECRET_KEY", "dev-only-secret-change-me")
 # Ensure all database tables exist as soon as the module is imported. This is
 # important under gunicorn, where each worker imports this module on startup.
 db.init_db()
+# (Re)create the built-in demo account (ID 111 / password 111) with sample data.
+# This runs on every startup, so the demo account survives database resets
+# (e.g. on Render's free tier where the SQLite file is ephemeral).
+db.seed_demo_account()
 
 
 # ---------- Auth helpers ----------
