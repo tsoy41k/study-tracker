@@ -19,3 +19,6 @@ Thumbs.db
 # Local secrets
 .env
 .env.*
+
+# Local documents (defense guide, notes) — keep out of the repo
+*.docx
