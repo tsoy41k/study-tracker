@@ -103,8 +103,8 @@ a:hover { text-decoration: underline; }
   transition: background .15s, opacity .15s;
 }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
-.btn-primary  { background: #7c3aed; color: #fff; }
-.btn-primary:hover:not(:disabled)  { background: #6d28d9; }
+.btn-primary  { background: #2563eb; color: #fff; }
+.btn-primary:hover:not(:disabled)  { background: #1d4ed8; }
 .btn-danger   { background: #dc2626; color: #fff; }
 .btn-danger:hover:not(:disabled)   { background: #b91c1c; }
 .btn-ghost    { background: transparent; color: #fff; border: 1px solid rgba(255,255,255,.4); }
