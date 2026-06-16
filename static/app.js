@@ -194,82 +194,84 @@ document
  * Study timer: start counting, stop and save the elapsed session.
  * ------------------------------------------------------------------- */
 
-let timerInterval = null;   // holds the setInterval id while the timer runs
-let timerStartTs = null;    // timestamp (ms) when the timer was started
+let timerInterval = null;   // will hold the id of the per-second ticker (empty = timer not running)
+let timerStartTs = null;    // will hold the start moment in milliseconds (empty for now)
 
-// Format a number of seconds as HH:MM:SS.
-function formatHMS(totalSec) {
-  const h = String(Math.floor(totalSec / 3600)).padStart(2, "0");
-  const m = String(Math.floor((totalSec % 3600) / 60)).padStart(2, "0");
-  const s = String(totalSec % 60).padStart(2, "0");
-  return `${h}:${m}:${s}`;
+
+// ===== TIME FORMAT: seconds -> "HH:MM:SS" =====
+
+function formatHMS(totalSec) {                                             // takes a number of seconds
+  const h = String(Math.floor(totalSec / 3600)).padStart(2, "0");         // hours: divide by 3600, round down, to text, pad with leading zero
+  const m = String(Math.floor((totalSec % 3600) / 60)).padStart(2, "0");  // minutes: remainder after hours, divide by 60, round down, pad zero
+  const s = String(totalSec % 60).padStart(2, "0");                       // seconds: remainder after dividing by 60, pad zero
+  return `${h}:${m}:${s}`;                                                 // join into "HH:MM:SS" and return
 }
 
-// Called every second to update the on-screen timer display.
-function tick() {
-  const elapsed = Math.floor((Date.now() - timerStartTs) / 1000);  // seconds so far
-  document.getElementById("timer-display").textContent = formatHMS(elapsed);
+
+// ===== TICK: updates the display (called once per second) =====
+
+function tick() {                                                         // display-update function
+  const elapsed = Math.floor((Date.now() - timerStartTs) / 1000);        // elapsed seconds = (now - start) in ms, divide by 1000, round down
+  document.getElementById("timer-display").textContent = formatHMS(elapsed); // write the formatted time into the on-screen display
 }
 
-// "Start" button: begin the timer.
-document.getElementById("btn-start").addEventListener("click", () => {
-  const select = document.getElementById("timer-subject");
-  if (!select.value) {                       // no subject chosen
-    alert("Choose a subject first.");
-    return;
+
+// ===== START BUTTON =====
+
+document.getElementById("btn-start").addEventListener("click", () => {    // find the Start button and listen for a click
+  const select = document.getElementById("timer-subject");                // find the subject dropdown
+  if (!select.value) {                                                    // if no subject is selected...
+    alert("Choose a subject first.");                                     // ...show a warning
+    return;                                                               // ...and exit, do not start the timer
   }
-  timerStartTs = Date.now();                 // record the start time
-  tick();                                    // show 00:00:00 immediately
-  timerInterval = setInterval(tick, 1000);   // update every second
+  timerStartTs = Date.now();                                              // REMEMBER the start moment (current time in ms)
+  tick();                                                                 // show 00:00:00 immediately, don't wait a second
+  timerInterval = setInterval(tick, 1000);                                // start calling tick every 1000 ms (once per second), keep its id
 
-  // Toggle button states: disable Start, enable Stop, lock the subject.
-  document.getElementById("btn-start").disabled = true;
-  document.getElementById("btn-stop").disabled = false;
-  select.disabled = true;
+  document.getElementById("btn-start").disabled = true;                   // disable Start (can't start twice)
+  document.getElementById("btn-stop").disabled = false;                   // enable Stop (now it can be stopped)
+  select.disabled = true;                                                 // lock the subject dropdown (can't switch mid-session)
 
-  // Show which subject is being studied.
-  const subjName = select.options[select.selectedIndex].textContent;
-  document.getElementById("timer-status").textContent = `Studying: ${subjName}`;
+  const subjName = select.options[select.selectedIndex].textContent;      // get the selected subject's name (text, not id)
+  document.getElementById("timer-status").textContent = `Studying: ${subjName}`; // show "Studying: <subject>"
 });
 
-// "Stop & Save" button: stop the timer and POST the session to the server.
-document.getElementById("btn-stop").addEventListener("click", async () => {
-  if (!timerInterval) return;            // nothing running
-  clearInterval(timerInterval);          // stop the per-second updates
-  timerInterval = null;
 
-  const endedTs = Date.now();            // end timestamp
-  const durationSec = Math.floor((endedTs - timerStartTs) / 1000);  // total seconds
-  const subjectId = parseInt(document.getElementById("timer-subject").value, 10);
+// ===== STOP & SAVE BUTTON =====
 
-  // Convert timestamps to ISO strings for the API.
-  const started = new Date(timerStartTs).toISOString();
-  const ended = new Date(endedTs).toISOString();
+document.getElementById("btn-stop").addEventListener("click", async () => { // find Stop, listen for click (async = it will wait for the server)
+  if (!timerInterval) return;                                             // if the timer isn't running, exit, nothing to stop
+  clearInterval(timerInterval);                                           // STOP the per-second updates (using the saved id)
+  timerInterval = null;                                                   // reset the variable — timer no longer running
 
-  // Send the completed session to the backend.
-  const res = await api.post("/api/records", {
-    subject_id: subjectId,
-    started_at: started,
-    ended_at: ended,
-    duration_sec: durationSec,
+  const endedTs = Date.now();                                             // record the end moment (current time in ms)
+  const durationSec = Math.floor((endedTs - timerStartTs) / 1000);        // FINAL duration = (end - start) in ms / 1000, round down
+  const subjectId = parseInt(document.getElementById("timer-subject").value, 10); // selected subject id, parseInt turns text into a number (10 = decimal)
+
+  const started = new Date(timerStartTs).toISOString();                   // start moment -> standard time text (ISO, e.g. "2025-05-27T19:00:00Z")
+  const ended = new Date(endedTs).toISOString();                          // end moment -> same ISO text
+
+  const res = await api.post("/api/records", {                            // SEND the session to the server (POST), wait for the response
+    subject_id: subjectId,                                                // which subject
+    started_at: started,                                                  // when it started
+    ended_at: ended,                                                      // when it ended
+    duration_sec: durationSec,                                            // how long it lasted (seconds)
   });
 
-  // Reset the UI back to the idle state.
-  document.getElementById("btn-start").disabled = false;
-  document.getElementById("btn-stop").disabled = true;
-  document.getElementById("timer-subject").disabled = false;
-  document.getElementById("timer-display").textContent = "00:00:00";
+  document.getElementById("btn-start").disabled = false;                  // enable Start again
+  document.getElementById("btn-stop").disabled = true;                    // disable Stop again
+  document.getElementById("timer-subject").disabled = false;             // unlock the subject dropdown
+  document.getElementById("timer-display").textContent = "00:00:00";      // reset the display to zero
 
-  if (res.ok) {
-    document.getElementById("timer-status").textContent =
-      `Saved! Session: ${formatHMS(durationSec)}`;
-    // A new record changes everything ML-related → refresh all of it.
-    await loadRecords();
-    await loadRecommendations();
-    await loadPatterns();
-    await loadForecast();
-  } else {
-    document.getElementById("timer-status").textContent =
+  if (res.ok) {                                                           // if the server saved it successfully...
+    document.getElementById("timer-status").textContent =                 // ...show a success message
+      `Saved! Session: ${formatHMS(durationSec)}`;                        //    with the duration of the saved session
+    await loadRecords();                                                  // refresh the records table
+    await loadRecommendations();                                         // refresh recommendations + stats + overview charts
+    await loadPatterns();                                                 // recompute KMeans (new data arrived)
+    await loadForecast();                                                 // recompute the regression forecast
+  } else {                                                                // if the server returned an error...
+    document.getElementById("timer-status").textContent =                 // ...show an error message
       "Error: " + (res.error || "could not save");
   }
 });
